@@ -18,10 +18,12 @@ function file(path: string, contents: string): RenderedFile {
 }
 
 const CONTEXT_GUARD = `import {
+  BadRequestException,
   CanActivate,
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../../common/public.decorator';
@@ -69,22 +71,26 @@ export class OrganizationContextGuard implements CanActivate {
     const user = request.user;
 
     if (user === undefined) {
-      return true;
+      throw new UnauthorizedException('Authentication required');
     }
 
-    const memberships = await this.prisma.membership.findMany({
-      where: { userId: user.id },
-      select: { organizationId: true, role: true },
-      orderBy: { organizationId: 'asc' },
-    });
-
     const header = request.headers[ORGANIZATION_HEADER];
-    const requested = Array.isArray(header) ? header[0] : header;
+    if (Array.isArray(header)) {
+      throw new BadRequestException('X-Organization-Id must be supplied once');
+    }
+    const requested = header;
 
-    if (typeof requested === 'string' && requested !== '') {
-      const membership = memberships.find((entry) => entry.organizationId === requested);
+    if (typeof requested === 'string') {
+      if (requested.length === 0 || requested.length > 128) {
+        throw new BadRequestException('Invalid X-Organization-Id');
+      }
 
-      if (membership === undefined) {
+      const membership = await this.prisma.membership.findFirst({
+        where: { userId: user.id, organizationId: requested },
+        select: { organizationId: true, role: true },
+      });
+
+      if (membership === null) {
         throw new ForbiddenException('You are not a member of this organization');
       }
 
@@ -92,6 +98,15 @@ export class OrganizationContextGuard implements CanActivate {
       user.organizationRole = membership.role;
       return true;
     }
+
+    // Only two rows are needed to distinguish no membership, one unambiguous
+    // membership, and the multi-organization case.
+    const memberships = await this.prisma.membership.findMany({
+      where: { userId: user.id },
+      select: { organizationId: true, role: true },
+      orderBy: { organizationId: 'asc' },
+      take: 2,
+    });
 
     if (memberships.length === 1) {
       user.organizationId = memberships[0].organizationId;
@@ -148,7 +163,7 @@ export class OrganizationRolesGuard implements CanActivate {
 
 function dtoFile(config: OrganizationsConfig): string {
   return `import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import type { Membership, MembershipRole, Organization } from '@prisma/client';
 
 export class CreateOrganizationDto {
@@ -166,13 +181,13 @@ export class AddMemberDto {
 
   @ApiPropertyOptional({ enum: ${JSON.stringify(config.roles)} })
   @IsOptional()
-  @IsString()
+  @IsIn(${JSON.stringify(config.roles)})
   role?: string;
 }
 
 export class UpdateMemberDto {
   @ApiProperty({ enum: ${JSON.stringify(config.roles)} })
-  @IsString()
+  @IsIn(${JSON.stringify(config.roles)})
   role!: string;
 }
 
@@ -223,6 +238,7 @@ function serviceFile(config: OrganizationsConfig, userEntity: string): string {
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AddMemberDto,
@@ -314,7 +330,9 @@ export class OrganizationService {
   ): Promise<MemberDto> {
     await this.requireAdmin(organizationId, actorId);
 
-    const account = await this.prisma.${delegate}.findUnique({ where: { email: dto.email } });
+    const account = await this.prisma.${delegate}.findUnique({
+      where: { email: dto.email.trim().toLowerCase() },
+    });
 
     if (account === null) {
       throw new NotFoundException('No account exists with that email');
@@ -347,17 +365,29 @@ export class OrganizationService {
   ): Promise<MemberDto> {
     await this.requireAdmin(organizationId, actorId);
 
-    const membership = await this.prisma.membership.findFirst({
-      where: { organizationId, userId },
-    });
+    const updated = await this.serializable(async (tx) => {
+      const membership = await tx.membership.findFirst({
+        where: { organizationId, userId },
+      });
 
-    if (membership === null) {
-      throw new NotFoundException('Membership not found');
-    }
+      if (membership === null) {
+        throw new NotFoundException('Membership not found');
+      }
 
-    const updated = await this.prisma.membership.update({
-      where: { id: membership.id },
-      data: { role: dto.role as never },
+      if (membership.role === OWNER_ROLE && dto.role !== OWNER_ROLE) {
+        const owners = await tx.membership.count({
+          where: { organizationId, role: OWNER_ROLE as never },
+        });
+
+        if (owners <= 1) {
+          throw new ConflictException('An organization must keep at least one ' + OWNER_ROLE);
+        }
+      }
+
+      return tx.membership.update({
+        where: { id: membership.id },
+        data: { role: dto.role as never },
+      });
     });
 
     return toMember(updated);
@@ -366,25 +396,27 @@ export class OrganizationService {
   async removeMember(organizationId: string, userId: string, actorId: string): Promise<void> {
     await this.requireAdmin(organizationId, actorId);
 
-    const membership = await this.prisma.membership.findFirst({
-      where: { organizationId, userId },
-    });
-
-    if (membership === null) {
-      throw new NotFoundException('Membership not found');
-    }
-
-    if (membership.role === OWNER_ROLE) {
-      const owners = await this.prisma.membership.count({
-        where: { organizationId, role: OWNER_ROLE as never },
+    await this.serializable(async (tx) => {
+      const membership = await tx.membership.findFirst({
+        where: { organizationId, userId },
       });
 
-      if (owners <= 1) {
-        throw new ConflictException('An organization must keep at least one ' + OWNER_ROLE);
+      if (membership === null) {
+        throw new NotFoundException('Membership not found');
       }
-    }
 
-    await this.prisma.membership.delete({ where: { id: membership.id } });
+      if (membership.role === OWNER_ROLE) {
+        const owners = await tx.membership.count({
+          where: { organizationId, role: OWNER_ROLE as never },
+        });
+
+        if (owners <= 1) {
+          throw new ConflictException('An organization must keep at least one ' + OWNER_ROLE);
+        }
+      }
+
+      await tx.membership.delete({ where: { id: membership.id } });
+    });
   }
 
   private async requireMembership(organizationId: string, userId: string): Promise<string> {
@@ -406,6 +438,24 @@ export class OrganizationService {
     if (!ADMIN_ROLES.includes(role)) {
       throw new ForbiddenException('Insufficient organization role');
     }
+  }
+
+  private async serializable<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(work, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        const retryable =
+          error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+        if (!retryable || attempt === 2) {
+          throw error;
+        }
+      }
+    }
+
+    throw new Error('Unreachable transaction retry state');
   }
 }
 `;

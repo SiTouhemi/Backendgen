@@ -35,11 +35,12 @@ export function digestToken(token: string): string {
 }
 `;
 
-const PASSWORD_SERVICE = `import { Injectable } from '@nestjs/common';
+const PASSWORD_SERVICE = `import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import * as bcrypt from 'bcryptjs';
 
 const BCRYPT_COST = 12;
+const BCRYPT_MAX_BYTES = 72;
 
 @Injectable()
 export class PasswordService {
@@ -50,10 +51,21 @@ export class PasswordService {
   private readonly decoyHash = bcrypt.hashSync(randomBytes(32).toString('hex'), BCRYPT_COST);
 
   hash(plain: string): Promise<string> {
+    if (Buffer.byteLength(plain, 'utf8') > BCRYPT_MAX_BYTES) {
+      throw new BadRequestException('Password is too long');
+    }
+
     return bcrypt.hash(plain, BCRYPT_COST);
   }
 
   async verify(plain: string, hash: string | null): Promise<boolean> {
+    if (Buffer.byteLength(plain, 'utf8') > BCRYPT_MAX_BYTES) {
+      // Preserve the expensive comparison for unknown/invalid inputs without
+      // allowing bcrypt's silent 72-byte truncation to authenticate a prefix.
+      await bcrypt.compare('invalid-overlong-password', this.decoyHash);
+      return false;
+    }
+
     const matches = await bcrypt.compare(plain, hash ?? this.decoyHash);
     return hash !== null && matches;
   }
@@ -96,8 +108,6 @@ export const REFRESH_TOKEN_TTL_MS = ${config.refreshTokenTtlDays} * 24 * 60 * 60
 
 export interface AccessTokenPayload {
   sub: string;
-  email: string;
-  role: string;
 }
 
 export interface TokenPair {
@@ -118,25 +128,18 @@ export class TokenService {
     private readonly jwt: JwtService,
   ) {}
 
-  async issue(account: { id: string; email: string; role: string }): Promise<TokenPair> {
-    const payload: AccessTokenPayload = {
-      sub: account.id,
-      email: account.email,
-      role: account.role,
-    };
-
-    const accessToken = await this.jwt.signAsync(payload);
-    const refreshToken = createOpaqueToken();
+  async issue(account: { id: string }): Promise<TokenPair> {
+    const material = await this.createTokenMaterial(account.id);
 
     await this.prisma.refreshSession.create({
       data: {
-        tokenHash: digestToken(refreshToken),
+        tokenHash: material.tokenHash,
         userId: account.id,
-        expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+        expiresAt: material.expiresAt,
       },
     });
 
-    return { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
+    return material.pair;
   }
 
   async rotate(refreshToken: string): Promise<TokenPair> {
@@ -159,18 +162,34 @@ export class TokenService {
       throw new UnauthorizedException('Refresh token has expired');
     }
 
-    const pair = await this.issue({
-      id: session.user.id,
-      email: session.user.email,
-      role: session.user.role,
+    const now = new Date();
+    const replacement = await this.createTokenMaterial(session.user.id);
+    const rotated = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.refreshSession.updateMany({
+        where: { id: session.id, revokedAt: null, expiresAt: { gt: now } },
+        data: { revokedAt: now, replacedByHash: replacement.tokenHash },
+      });
+
+      if (claimed.count !== 1) {
+        return false;
+      }
+
+      await tx.refreshSession.create({
+        data: {
+          tokenHash: replacement.tokenHash,
+          userId: session.userId,
+          expiresAt: replacement.expiresAt,
+        },
+      });
+      return true;
     });
 
-    await this.prisma.refreshSession.update({
-      where: { tokenHash },
-      data: { revokedAt: new Date(), replacedByHash: digestToken(pair.refreshToken) },
-    });
+    if (!rotated) {
+      await this.revokeAllSessions(session.userId);
+      throw new UnauthorizedException('Refresh token has already been used');
+    }
 
-    return pair;
+    return replacement.pair;
   }
 
   async revoke(refreshToken: string): Promise<void> {
@@ -192,6 +211,21 @@ export class TokenService {
       where: { id },
       select: { id: true, email: true, role: true },
     });
+  }
+
+  private async createTokenMaterial(userId: string): Promise<{
+    pair: TokenPair;
+    tokenHash: string;
+    expiresAt: Date;
+  }> {
+    const payload: AccessTokenPayload = { sub: userId };
+    const accessToken = await this.jwt.signAsync(payload);
+    const refreshToken = createOpaqueToken();
+    return {
+      pair: { accessToken, refreshToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS },
+      tokenHash: digestToken(refreshToken),
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+    };
   }
 }
 `;
@@ -221,6 +255,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: requireAccessSecret(),
+      algorithms: ['HS256'],
     });
   }
 
@@ -397,52 +432,58 @@ export class RegisterDto {
   @MaxLength(254)
   email!: string;
 
-  @ApiProperty({ minLength: ${config.minPasswordLength}, maxLength: 128 })
+  @ApiProperty({ minLength: ${config.minPasswordLength}, maxLength: 72 })
   @IsString()
   @MinLength(${config.minPasswordLength})
-  @MaxLength(128)
+  @MaxLength(72)
   password!: string;
 
 ${extra.join("\n").trimEnd()}
 }
 
 export class LoginDto {
-  @ApiProperty()
+  @ApiProperty({ maxLength: 254 })
   @IsEmail()
+  @MaxLength(254)
   email!: string;
 
-  @ApiProperty()
+  @ApiProperty({ maxLength: 72 })
   @IsString()
+  @MaxLength(72)
   password!: string;
 }
 
 export class RefreshDto {
   @ApiProperty()
   @IsString()
+  @MaxLength(256)
   refreshToken!: string;
 }
 
 export class TokenDto {
   @ApiProperty()
   @IsString()
+  @MaxLength(256)
   token!: string;
 }
 
 export class ResetPasswordDto {
   @ApiProperty()
   @IsString()
+  @MaxLength(256)
   token!: string;
 
-  @ApiProperty({ minLength: ${config.minPasswordLength}, maxLength: 128 })
+  @ApiProperty({ minLength: ${config.minPasswordLength}, maxLength: 72 })
   @IsString()
   @MinLength(${config.minPasswordLength})
-  @MaxLength(128)
+  @MaxLength(72)
   password!: string;
 }
 
 export class RequestPasswordResetDto {
-  @ApiProperty()
+  @ApiProperty({ maxLength: 254 })
   @IsEmail()
+  @MaxLength(254)
   email!: string;
 }
 
@@ -501,12 +542,17 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
 
     const token = createOpaqueToken();
 
-    await this.prisma.emailVerificationToken.create({
-      data: {
-        tokenHash: digestToken(token),
-        userId,
-        expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.emailVerificationToken.deleteMany({
+        where: { userId, consumedAt: null },
+      });
+      await tx.emailVerificationToken.create({
+        data: {
+          tokenHash: digestToken(token),
+          userId,
+          expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
+        },
+      });
     });
 
     this.events.emit('user.email_verification_requested', {
@@ -525,16 +571,27 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
       throw new BadRequestException('Invalid or expired verification token');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.emailVerificationToken.update({
-        where: { id: record.id },
-        data: { consumedAt: new Date() },
-      }),
-      this.prisma.${delegate}.update({
+    const now = new Date();
+    const consumed = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.emailVerificationToken.updateMany({
+        where: { id: record.id, consumedAt: null, expiresAt: { gt: now } },
+        data: { consumedAt: now },
+      });
+
+      if (claimed.count !== 1) {
+        return false;
+      }
+
+      await tx.${delegate}.update({
         where: { id: record.userId },
-        data: { emailVerifiedAt: new Date() },
-      }),
-    ]);
+        data: { emailVerifiedAt: now },
+      });
+      return true;
+    });
+
+    if (!consumed) {
+      throw new BadRequestException('Invalid or expired verification token');
+    }
   }
 `
     : "";
@@ -546,7 +603,9 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
    * cannot be used to enumerate accounts.
    */
   async requestPasswordReset(email: string): Promise<void> {
-    const account = await this.prisma.${delegate}.findUnique({ where: { email } });
+    const account = await this.prisma.${delegate}.findUnique({
+      where: { email: normalizeEmail(email) },
+    });
 
     if (account === null) {
       return;
@@ -554,12 +613,17 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
 
     const token = createOpaqueToken();
 
-    await this.prisma.passwordResetToken.create({
-      data: {
-        tokenHash: digestToken(token),
-        userId: account.id,
-        expiresAt: new Date(Date.now() + RESET_TTL_MS),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passwordResetToken.deleteMany({
+        where: { userId: account.id, consumedAt: null },
+      });
+      await tx.passwordResetToken.create({
+        data: {
+          tokenHash: digestToken(token),
+          userId: account.id,
+          expiresAt: new Date(Date.now() + RESET_TTL_MS),
+        },
+      });
     });
 
     this.events.emit('user.password_reset_requested', {
@@ -578,16 +642,28 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.passwordResetToken.update({
-        where: { id: record.id },
-        data: { consumedAt: new Date() },
-      }),
-      this.prisma.${delegate}.update({
+    const passwordHash = await this.passwords.hash(password);
+    const now = new Date();
+    const consumed = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.passwordResetToken.updateMany({
+        where: { id: record.id, consumedAt: null, expiresAt: { gt: now } },
+        data: { consumedAt: now },
+      });
+
+      if (claimed.count !== 1) {
+        return false;
+      }
+
+      await tx.${delegate}.update({
         where: { id: record.userId },
-        data: { passwordHash: await this.passwords.hash(password) },
-      }),
-    ]);
+        data: { passwordHash },
+      });
+      return true;
+    });
+
+    if (!consumed) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
 
     // A password change invalidates every existing session.
     await this.tokens.revokeAllSessions(record.userId);
@@ -622,6 +698,10 @@ import { TokenPair, TokenService } from './token.service';
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 60 * 60 * 1000;
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -632,7 +712,8 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
-    const existing = await this.prisma.${delegate}.findUnique({ where: { email: dto.email } });
+    const email = normalizeEmail(dto.email);
+    const existing = await this.prisma.${delegate}.findUnique({ where: { email } });
 
     if (existing !== null) {
       throw new ConflictException('An account with this email already exists');
@@ -640,7 +721,7 @@ export class AuthService {
 
     const account = await this.prisma.${delegate}.create({
       data: {
-        email: dto.email,
+        email,
         passwordHash: await this.passwords.hash(dto.password),
 ${createFields}
       },
@@ -653,7 +734,9 @@ ${registerVerification}
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
-    const account = await this.prisma.${delegate}.findUnique({ where: { email: dto.email } });
+    const account = await this.prisma.${delegate}.findUnique({
+      where: { email: normalizeEmail(dto.email) },
+    });
     const valid = await this.passwords.verify(dto.password, account?.passwordHash ?? null);
 
     if (account === null || !valid) {

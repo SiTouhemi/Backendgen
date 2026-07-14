@@ -42,6 +42,6 @@ For PostgreSQL-backed E2E, export `DATABASE_URL` and `BACKENDGEN_E2E_BUILD=1`. C
 
 Generated files and user code are separated. Files marked `generated` in `.backendgen/manifest.json` are compiler-owned. Files marked `custom-scaffold` are written once and never overwritten. Generation refuses to replace locally modified generated files unless `--force` is explicit.
 
-Start with [the architecture](docs/ARCHITECTURE.md), [specification](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), and [threat model](docs/THREAT_MODEL.md).
+Start with [the architecture](docs/ARCHITECTURE.md), [specification](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), [threat model](docs/THREAT_MODEL.md), and [latest generated-code security review](docs/SECURITY_REVIEW_2026-07-14.md).
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

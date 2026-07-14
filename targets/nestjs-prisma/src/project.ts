@@ -174,10 +174,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const context = host.switchToHttp();
     const response = context.getResponse<Response>();
     const request = context.getRequest<Request>();
-    const body = this.toErrorBody(exception, request.url);
+    // Query strings often contain tokens or user data. Keep both the response
+    // and logs on the route path so operational telemetry cannot capture them.
+    const body = this.toErrorBody(exception, request.path);
 
     if (body.statusCode >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logger.error(\`\${request.method} \${request.url}\`, exception instanceof Error ? exception.stack : String(exception));
+      const errorName = exception instanceof Error ? exception.name : 'UnknownError';
+      const stack = process.env.NODE_ENV === 'production' ? undefined : exception instanceof Error ? exception.stack : undefined;
+      this.logger.error(\`\${request.method} \${request.path} failed (\${errorName})\`, stack);
     }
 
     response.status(body.statusCode).json(body);
@@ -268,11 +272,12 @@ import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class PaginationQueryDto {
-  @ApiPropertyOptional({ minimum: 1, default: 1 })
+  @ApiPropertyOptional({ minimum: 1, maximum: 1000000, default: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(1000000)
   page: number = 1;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })
@@ -393,18 +398,40 @@ function bootstrapHelper(context: TargetRenderContext): string {
   const { settings } = context;
   return `import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import type { Express } from 'express';
+import { json, urlencoded } from 'express';
+import helmet from 'helmet';
+
+export interface AppSecurityOptions {
+  /** Number of trusted reverse proxies. Keep at zero unless the deployment has one. */
+  trustProxyHops?: number;
+  /** Swagger UI needs an inline script exception, so it is opt-in in production. */
+  swaggerEnabled?: boolean;
+}
 
 /**
  * Shared between \`main.ts\` and the integration tests so that both run against
  * an identically configured application.
  */
-export function configureApp(app: INestApplication): void {
+export function configureApp(app: INestApplication, options: AppSecurityOptions = {}): void {
+  const server = app.getHttpAdapter().getInstance() as Express;
+  server.disable('x-powered-by');
+  if ((options.trustProxyHops ?? 0) > 0) {
+    server.set('trust proxy', options.trustProxyHops as number);
+  }
+  server.use(
+    helmet(options.swaggerEnabled === true ? { contentSecurityPolicy: false } : {}),
+  );
+  server.use(json({ limit: '100kb', strict: true }));
+  server.use(urlencoded({ extended: false, limit: '20kb', parameterLimit: 100 }));
+
   app.setGlobalPrefix('${settings.apiPrefix}');
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
+      transformOptions: { enableImplicitConversion: false },
     }),
   );
 }
@@ -430,10 +457,15 @@ import { loadEnvironment } from './generated/config/environment';
 
 async function bootstrap(): Promise<void> {
   const environment = loadEnvironment();
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
 
-  configureApp(app);
-  setupOpenApi(app);
+  configureApp(app, {
+    swaggerEnabled: environment.SWAGGER_ENABLED,
+    trustProxyHops: environment.TRUST_PROXY_HOPS,
+  });
+  if (environment.SWAGGER_ENABLED) {
+    setupOpenApi(app);
+  }
   app.enableShutdownHooks();
 
   await app.listen(environment.PORT);
@@ -449,8 +481,10 @@ function environmentFile(context: TargetRenderContext): string {
   const requiredList = ["DATABASE_URL", ...required].sort();
 
   const fields = [
-    "  NODE_ENV: string;",
+    "  NODE_ENV: 'development' | 'test' | 'production';",
     "  PORT: number;",
+    "  SWAGGER_ENABLED: boolean;",
+    "  TRUST_PROXY_HOPS: number;",
     ...requiredList.map((name) => `  ${name}: string;`),
     ...optional.map((name) => `  ${name}: string | undefined;`),
   ].join("\n");
@@ -490,9 +524,26 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
     throw new Error('PORT must be an integer between 1 and 65535');
   }
 
+  const nodeEnvironment = source.NODE_ENV ?? 'development';
+  if (!['development', 'test', 'production'].includes(nodeEnvironment)) {
+    throw new Error('NODE_ENV must be development, test, or production');
+  }
+
+  const trustProxyHops = Number.parseInt(source.TRUST_PROXY_HOPS ?? '0', 10);
+  if (Number.isNaN(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) {
+    throw new Error('TRUST_PROXY_HOPS must be an integer between 0 and 10');
+  }
+
+  const swaggerSetting = source.SWAGGER_ENABLED;
+  if (swaggerSetting !== undefined && swaggerSetting !== 'true' && swaggerSetting !== 'false') {
+    throw new Error('SWAGGER_ENABLED must be true or false');
+  }
+
   return {
-    NODE_ENV: source.NODE_ENV ?? 'development',
+    NODE_ENV: nodeEnvironment as Environment['NODE_ENV'],
     PORT: port,
+    SWAGGER_ENABLED: swaggerSetting === undefined ? nodeEnvironment !== 'production' : swaggerSetting === 'true',
+    TRUST_PROXY_HOPS: trustProxyHops,
 ${assignments}
   };
 }
@@ -518,6 +569,7 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
+USER node
 EXPOSE ${context.settings.port}
 CMD ["node", "dist/main"]
 `;
@@ -530,15 +582,15 @@ function dockerCompose(context: TargetRenderContext): string {
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${project}
-      POSTGRES_PASSWORD: ${project}
-      POSTGRES_DB: ${project}
+      POSTGRES_USER: \${POSTGRES_USER:-${project}}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: \${POSTGRES_DB:-${project}}
     ports:
       - '5432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${project}']
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -546,15 +598,36 @@ function dockerCompose(context: TargetRenderContext): string {
   api:
     build: .
     depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://\${POSTGRES_USER:-${project}}:\${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/\${POSTGRES_DB:-${project}}?schema=public
+    ports:
+      - '${port}:${port}'
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  migrate:
+    build:
+      context: .
+      target: builder
+    depends_on:
       postgres:
         condition: service_healthy
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${project}:${project}@postgres:5432/${project}?schema=public
-    ports:
-      - '${port}:${port}'
-    command: sh -c "npx prisma migrate deploy && node dist/main"
+      DATABASE_URL: postgresql://\${POSTGRES_USER:-${project}}:\${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/\${POSTGRES_DB:-${project}}?schema=public
+    command: npm run db:deploy
+    restart: 'no'
 
 volumes:
   postgres-data:
@@ -596,8 +669,10 @@ npm run db:deploy
 npm run start:dev
 \`\`\`
 
-The API listens on port ${settings.port}. OpenAPI documentation is served at
-\`/${settings.apiPrefix}/docs\`, and \`/${settings.apiPrefix}/health\` reports database readiness.
+The API listens on port ${settings.port}. Set \`SWAGGER_ENABLED=true\` to serve
+OpenAPI documentation at \`/${settings.apiPrefix}/docs\`. It is disabled by default
+in \`.env.example\` and whenever \`NODE_ENV=production\`. The
+\`/${settings.apiPrefix}/health\` endpoint reports database readiness.
 
 ## Commands
 
@@ -633,6 +708,19 @@ ${customization || "No customization points are declared by the selected feature
 
 Run \`backendgen generate --dry-run\` before regenerating to see exactly what
 would change.
+
+## Production security checklist
+
+- Terminate TLS at a maintained reverse proxy or load balancer.
+- Replace every placeholder secret and database password; never commit \`.env\`.
+- Keep \`SWAGGER_ENABLED=false\` unless the documentation is intentionally public.
+- Keep \`TRUST_PROXY_HOPS=0\` unless a known number of proxies sits in front of the API.
+- CORS is disabled by default. If a browser client needs it, allowlist exact origins.
+- The built-in auth rate limiter is process-local. Configure a shared throttler
+  store before scaling to multiple API instances.
+- The Compose file is a local/development baseline. Use a least-privilege database
+  account, managed secrets, backups, network policy, and pinned images in production.
+- If custom code changes authentication to cookies, add CSRF protection.
 
 ## Time zones
 

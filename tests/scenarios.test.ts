@@ -183,9 +183,74 @@ describe("scenarios", () => {
     expect(guardOrder).toEqual([...guardOrder].sort((left, right) => left - right));
     expect(guardOrder.every((index) => index >= 0)).toBe(true);
   });
+
+  it("all-features emits secure defaults at every generated trust boundary", () => {
+    const { rendered } = compile("all-features");
+    const contents = (path: string): string =>
+      rendered.files.find((file) => file.path === path)?.contents ?? "";
+
+    expect(contents("src/main.ts")).toContain("{ bodyParser: false }");
+    const bootstrap = contents("src/generated/common/bootstrap.ts");
+    expect(bootstrap).toContain("server.disable('x-powered-by')");
+    expect(bootstrap).toContain("helmet(");
+    expect(bootstrap).toContain("json({ limit: '100kb'");
+
+    const tokens = contents("src/generated/auth/token.service.ts");
+    expect(tokens).toContain("tx.refreshSession.updateMany");
+    expect(tokens).toContain("claimed.count !== 1");
+    expect(contents("src/generated/auth/jwt.strategy.ts")).toContain("algorithms: ['HS256']");
+
+    const organizations = contents("src/generated/organizations/organization.service.ts");
+    expect(organizations).toContain("TransactionIsolationLevel.Serializable");
+    expect(organizations).toContain("membership.role === OWNER_ROLE && dto.role !== OWNER_ROLE");
+
+    const reservations = contents("src/generated/reservations/reservation.service.ts");
+    expect(reservations).toContain("this.scopedWhere({ idempotencyKey }, scope)");
+    expect(reservations).toContain("updateManyAndReturn");
+    expect(reservations).not.toContain("findUnique({ where: { idempotencyKey }");
+
+    const logProvider = contents("src/generated/notifications/providers/log.provider.ts");
+    expect(logProvider).not.toContain("message.text");
+    expect(logProvider).not.toContain("message.to");
+    expect(contents("src/generated/notifications/providers/resend.provider.ts")).toContain(
+      "AbortSignal.timeout",
+    );
+
+    expect(contents("Dockerfile")).toContain("USER node");
+    const compose = contents("docker-compose.yml");
+    expect(compose).toContain("read_only: true");
+    expect(compose).toContain("no-new-privileges:true");
+    expect(compose).toContain("condition: service_completed_successfully");
+    expect(compose).toContain("${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}");
+    expect(compose).not.toContain("POSTGRES_PASSWORD: everything-api");
+  });
+
+  it("tenant-scoped relations cannot point at another tenant's row", () => {
+    const { rendered } = compile("multi-tenant-saas");
+    const service = rendered.files.find(
+      (file) => file.path === "src/generated/task/task.service.ts",
+    )!;
+
+    expect(service.contents).toContain("this.prisma.project.findFirst");
+    expect(service.contents).toContain("organizationId: requireOrganization(scope)");
+    expect(service.contents).toContain("Invalid related Project");
+  });
 });
 
 describe("specification errors", () => {
+  it("refuses a bcrypt password minimum above its safe 72-byte ceiling", () => {
+    const spec = structuredClone(
+      SCENARIOS.find((candidate) => candidate.name === "authentication")!.spec,
+    );
+    spec.features.auth = { ...spec.features.auth, minPasswordLength: 73 };
+
+    const result = compileBackend(spec, { features, targets });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.some((issue) => issue.path.includes("minPasswordLength"))).toBe(true);
+  });
+
   it("refuses to compile a reservation entity the user also declared", () => {
     const scenario = SCENARIOS.find((candidate) => candidate.name === "hotel-reservation")!;
     const spec = structuredClone(scenario.spec);

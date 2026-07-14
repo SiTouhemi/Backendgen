@@ -99,9 +99,16 @@ function envExample(context: TargetRenderContext, contributions: RenderResult): 
     "",
     "NODE_ENV=development",
     `PORT=${context.settings.port}`,
+    "SWAGGER_ENABLED=false",
+    "TRUST_PROXY_HOPS=0",
     "",
-    "# PostgreSQL connection string.",
-    `DATABASE_URL="postgresql://${project}:${project}@localhost:5432/${project}?schema=public"`,
+    "# PostgreSQL settings used by docker-compose.yml. Replace the password.",
+    `POSTGRES_USER=${project}`,
+    'POSTGRES_PASSWORD="replace-with-a-random-database-password"',
+    `POSTGRES_DB=${project}`,
+    "",
+    "# PostgreSQL connection string for running the API directly on the host.",
+    `DATABASE_URL="postgresql://${project}:replace-with-a-random-database-password@localhost:5432/${project}?schema=public"`,
   ];
 
   for (const entry of contributions.envExample) {

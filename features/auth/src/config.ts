@@ -55,7 +55,9 @@ export const AUTH_CONFIG_SCHEMA = {
     refreshTokenTtlDays: { type: "integer", minimum: 1, maximum: 365, default: 30 },
     emailVerification: { type: "boolean", default: true },
     passwordReset: { type: "boolean", default: true },
-    minPasswordLength: { type: "integer", minimum: 8, maximum: 128, default: 12 },
+    // bcrypt rejects/truncates beyond 72 bytes, so generated DTO policy must
+    // never demand a minimum that its password service cannot safely accept.
+    minPasswordLength: { type: "integer", minimum: 8, maximum: 72, default: 12 },
     rateLimit: {
       type: "object",
       additionalProperties: false,

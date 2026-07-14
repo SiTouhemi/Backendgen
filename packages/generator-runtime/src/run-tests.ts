@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
-import { join } from "node:path";
+import { GENERATOR_NAME } from "@backend-compiler/common";
+import { access, readFile, realpath } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { hashContents, readManifest } from "./manifest.js";
+import { assertSafeRelativePath } from "./plan.js";
 
 export interface CommandResult {
   command: string;
@@ -36,6 +39,76 @@ export interface RunTestsResult {
 
 const DEFAULT_MAX_OUTPUT = 16_000;
 const DEFAULT_TIMEOUT = 15 * 60 * 1000;
+
+function failedPreflight(output: string, started: number): CommandResult {
+  return {
+    command: "verify generated manifest",
+    exitCode: 1,
+    output,
+    truncated: false,
+    durationMs: Date.now() - started,
+  };
+}
+
+/**
+ * Test execution is code execution. Refuse arbitrary package directories and
+ * locally modified generated scripts; custom-scaffold files intentionally stay
+ * editable because they are the documented extension surface.
+ */
+async function verifyGeneratedProject(outputDirectory: string): Promise<CommandResult> {
+  const started = Date.now();
+  const manifest = await readManifest(outputDirectory);
+
+  if (manifest === null || manifest.generator.name !== GENERATOR_NAME) {
+    return failedPreflight(
+      "Not a valid backendgen project. Generate it before running generated tests.",
+      started,
+    );
+  }
+
+  const root = await realpath(outputDirectory).catch(() => null);
+  if (root === null) {
+    return failedPreflight("Generated project directory does not exist.", started);
+  }
+
+  const generated = manifest.files.filter((entry) => entry.ownership === "generated");
+  if (!generated.some((entry) => entry.path === "package.json")) {
+    return failedPreflight("Generation manifest does not own package.json.", started);
+  }
+
+  for (const entry of generated) {
+    if (assertSafeRelativePath(entry.path) !== null) {
+      return failedPreflight("Generation manifest contains an unsafe file path.", started);
+    }
+
+    const absolute = join(root, entry.path);
+    const resolved = await realpath(absolute).catch(() => null);
+    if (resolved === null) {
+      return failedPreflight(`Generated file is missing: ${entry.path}`, started);
+    }
+
+    const fromRoot = relative(root, resolved);
+    if (fromRoot.startsWith("..") || fromRoot === "") {
+      return failedPreflight("A generated file resolves outside the project directory.", started);
+    }
+
+    const contents = await readFile(resolved, "utf8").catch(() => null);
+    if (contents === null || hashContents(contents) !== entry.hash) {
+      return failedPreflight(
+        `Generated file was modified after generation: ${entry.path}. Regenerate it first.`,
+        started,
+      );
+    }
+  }
+
+  return {
+    command: "verify generated manifest",
+    exitCode: 0,
+    output: "Generated project manifest verified.",
+    truncated: false,
+    durationMs: Date.now() - started,
+  };
+}
 
 function runCommand(input: {
   command: string;
@@ -155,6 +228,11 @@ export async function runGeneratedTests(options: RunTestsOptions): Promise<RunTe
   };
 
   const commands: CommandResult[] = [];
+  commands.push(await verifyGeneratedProject(cwd));
+  if (commands[0]!.exitCode !== 0) {
+    return { success: false, tests: { passed: 0, failed: 0, total: 0 }, commands };
+  }
+
   const npmExecPath = process.env.npm_execpath;
   const run = (args: string[]): Promise<CommandResult> =>
     npmExecPath

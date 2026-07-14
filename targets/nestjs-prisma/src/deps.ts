@@ -13,6 +13,7 @@ export const BASE_DEPENDENCIES: Readonly<Record<string, string>> = {
   "@prisma/client": "^6.5.0",
   "class-transformer": "^0.5.1",
   "class-validator": "^0.14.1",
+  helmet: "^8.3.0",
   "reflect-metadata": "^0.2.2",
   rxjs: "^7.8.1",
 };

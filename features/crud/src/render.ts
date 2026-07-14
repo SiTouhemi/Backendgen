@@ -121,12 +121,14 @@ function createDto(entity: NormalizedEntity): string {
   for (const key of writableForeignKeys(entity)) {
     swagger.add(key.required ? "ApiProperty" : "ApiPropertyOptional");
     validators.add("IsString");
+    validators.add("MaxLength");
     if (!key.required) validators.add("IsOptional");
 
     body.push(
       `  @${key.required ? "ApiProperty" : "ApiPropertyOptional"}({ description: 'Identifier of the related ${key.target}' })`,
       ...(key.required ? [] : ["  @IsOptional()"]),
       "  @IsString()",
+      "  @MaxLength(128)",
       `  ${key.name}${key.required ? "!" : "?"}: string;`,
       "",
     );
@@ -172,10 +174,12 @@ function queryDto(entity: NormalizedEntity, crud: CrudSettings): string {
 
   if (searchableFields(entity).length > 0) {
     validators.add("IsString");
+    validators.add("MaxLength");
     body.push(
       "  @ApiPropertyOptional({ description: 'Case-insensitive substring search across text fields' })",
       "  @IsOptional()",
       "  @IsString()",
+      "  @MaxLength(200)",
       "  q?: string;",
       "",
     );
@@ -192,7 +196,7 @@ function queryDto(entity: NormalizedEntity, crud: CrudSettings): string {
       body.push(
         "  @ApiPropertyOptional()",
         "  @IsOptional()",
-        "  @Transform(({ value }) => value === 'true' || value === true)",
+        "  @Transform(({ value }) => value === 'true' ? true : value === 'false' ? false : value)",
         "  @IsBoolean()",
         `  ${field.name}?: boolean;`,
         "",
@@ -209,10 +213,12 @@ function queryDto(entity: NormalizedEntity, crud: CrudSettings): string {
 
   for (const key of writableForeignKeys(entity)) {
     validators.add("IsString");
+    validators.add("MaxLength");
     body.push(
       `  @ApiPropertyOptional({ description: 'Filter by related ${key.target}' })`,
       "  @IsOptional()",
       "  @IsString()",
+      "  @MaxLength(128)",
       `  ${key.name}?: string;`,
       "",
     );
@@ -312,6 +318,9 @@ function serviceFile(entity: NormalizedEntity, context: TargetRenderContext): st
   const optionalFields = writable.filter((field) => !requiredFields.includes(field));
   const requiredKeys = writableForeignKeys(entity).filter((key) => key.required);
   const optionalKeys = writableForeignKeys(entity).filter((key) => !key.required);
+  const protectedRelations = writableForeignKeys(entity)
+    .map((key) => ({ key, target: context.entity(key.target) }))
+    .filter(({ target }) => target.softDelete || target.tenant !== null || target.ownership !== null);
 
   const scopeImports = new Set<string>(["RequestScope"]);
   if (entity.ownership) {
@@ -320,6 +329,13 @@ function serviceFile(entity: NormalizedEntity, context: TargetRenderContext): st
   }
   if (entity.tenant) {
     scopeImports.add("requireOrganization");
+  }
+  for (const { target } of protectedRelations) {
+    if (target.tenant) scopeImports.add("requireOrganization");
+    if (target.ownership) {
+      scopeImports.add("isAdmin");
+      scopeImports.add("requireUser");
+    }
   }
 
   const createData = [
@@ -391,10 +407,41 @@ ${searchable.map((field) => `        { ${field.name}: { contains: query.q, mode:
     .join("\n");
 
   const removeBody = entity.softDelete
-    ? `    await this.prisma.${delegate}.update({ where: { id }, data: { deletedAt: new Date() } });`
-    : `    await this.prisma.${delegate}.delete({ where: { id } });`;
+    ? `    const result = await this.prisma.${delegate}.updateMany({
+      where: this.scopedWhere({ id }, scope),
+      data: { deletedAt: new Date() },
+    });`
+    : `    const result = await this.prisma.${delegate}.deleteMany({
+      where: this.scopedWhere({ id }, scope),
+    });`;
 
-  return `import { Injectable, NotFoundException } from '@nestjs/common';
+  const relationChecks = protectedRelations
+    .map(({ key, target }) => {
+      const clauses = [`          id: dto.${key.name},`];
+      if (target.softDelete) clauses.push("          deletedAt: null,");
+      if (target.tenant) {
+        clauses.push(`          ${target.tenant.foreignKey}: requireOrganization(scope),`);
+      }
+      if (target.ownership) {
+        clauses.push(
+          `          ...(isAdmin(scope, ADMIN_ROLES) ? {} : { ${target.ownership.foreignKey}: requireUser(scope) }),`,
+        );
+      }
+      return `    if (dto.${key.name} !== undefined) {
+      const related = await this.prisma.${names.delegate(target.name)}.findFirst({
+        where: {
+${clauses.join("\n")}
+        },
+        select: { id: true },
+      });
+      if (related === null) {
+        throw new BadRequestException('Invalid related ${key.target}');
+      }
+    }`;
+    })
+    .join("\n");
+
+  return `import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Page, toPage } from '../common/pagination';
 ${importLine([...scopeImports], "../common/scope")}import { PrismaService } from '../prisma/prisma.service';
@@ -415,6 +462,7 @@ export class ${model}Service {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(dto: Create${model}Dto, scope: RequestScope): Promise<${model}ResponseDto> {
+    await this.validateRelatedRecords(dto, scope);
     const data: Prisma.${model}UncheckedCreateInput = {
 ${createData.join("\n")}
     };
@@ -439,6 +487,7 @@ ${createData.join("\n")}
   }
 
   async findOne(id: string, scope: RequestScope): Promise<${model}ResponseDto> {
+    this.assertId(id);
     const row = await this.prisma.${delegate}.findFirst({ where: this.scopedWhere({ id }, scope) });
 
     if (row === null) {
@@ -449,18 +498,41 @@ ${createData.join("\n")}
   }
 
   async update(id: string, dto: Update${model}Dto, scope: RequestScope): Promise<${model}ResponseDto> {
-    await this.findOne(id, scope);
+    this.assertId(id);
+    await this.validateRelatedRecords(dto, scope);
 
-    const data: Prisma.${model}UncheckedUpdateInput = {};
+    const data: Prisma.${model}UncheckedUpdateManyInput = {};
 ${updateData.join("\n")}
 
-    const updated = await this.prisma.${delegate}.update({ where: { id }, data });
-    return to${model}Response(updated);
+    const result = await this.prisma.${delegate}.updateMany({
+      where: this.scopedWhere({ id }, scope),
+      data,
+    });
+    if (result.count !== 1) {
+      throw new NotFoundException('${model} not found');
+    }
+    return this.findOne(id, scope);
   }
 
   async remove(id: string, scope: RequestScope): Promise<void> {
-    await this.findOne(id, scope);
+    this.assertId(id);
 ${removeBody}
+    if (result.count !== 1) {
+      throw new NotFoundException('${model} not found');
+    }
+  }
+
+  private assertId(id: string): void {
+    if (id.length === 0 || id.length > 128) {
+      throw new BadRequestException('Invalid identifier');
+    }
+  }
+
+  private async validateRelatedRecords(
+    dto: Partial<Create${model}Dto>,
+    scope: RequestScope,
+  ): Promise<void> {
+${relationChecks.length > 0 ? relationChecks : "    void dto;\n    void scope;"}
   }
 
   private filters(query: Query${model}Dto): Prisma.${model}WhereInput {
@@ -620,7 +692,9 @@ describe('${model}Service', () => {
     findMany: jest.fn(),
     count: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
     delete: jest.fn(),
+    deleteMany: jest.fn(),
   };
 
   const prisma = {
@@ -740,7 +814,7 @@ export interface TestContext {
 
 export async function createTestApp(): Promise<TestContext> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication();
+  const app = moduleRef.createNestApplication({ bodyParser: false });
 
   configureApp(app);
   await app.init();

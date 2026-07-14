@@ -51,16 +51,66 @@ export function serializeManifest(manifest: GenerationManifest): string {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isVersionedName(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    typeof value.version === "string" &&
+    value.version.length > 0
+  );
+}
+
+function isManifest(value: unknown): value is GenerationManifest {
+  if (!isRecord(value) || value.manifestVersion !== MANIFEST_VERSION) return false;
+  if (!isVersionedName(value.generator)) return false;
+  if (
+    !isRecord(value.target) ||
+    typeof value.target.id !== "string" ||
+    typeof value.target.version !== "string"
+  ) {
+    return false;
+  }
+  if (
+    typeof value.specChecksum !== "string" ||
+    typeof value.irChecksum !== "string" ||
+    !Array.isArray(value.features) ||
+    !value.features.every(isVersionedName) ||
+    !Array.isArray(value.files) ||
+    value.files.length > 10_000
+  ) {
+    return false;
+  }
+
+  const paths = new Set<string>();
+  for (const entry of value.files) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.path !== "string" ||
+      entry.path.length === 0 ||
+      entry.path.length > 1_024 ||
+      typeof entry.hash !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(entry.hash) ||
+      (entry.ownership !== "generated" && entry.ownership !== "custom-scaffold") ||
+      paths.has(entry.path)
+    ) {
+      return false;
+    }
+    paths.add(entry.path);
+  }
+
+  return true;
+}
+
 export async function readManifest(outputDirectory: string): Promise<GenerationManifest | null> {
   try {
     const source = await readFile(join(outputDirectory, MANIFEST_PATH), "utf8");
-    const parsed = JSON.parse(source) as GenerationManifest;
-
-    if (parsed.manifestVersion !== MANIFEST_VERSION) {
-      return null;
-    }
-
-    return parsed;
+    const parsed: unknown = JSON.parse(source);
+    return isManifest(parsed) ? parsed : null;
   } catch {
     return null;
   }

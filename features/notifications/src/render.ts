@@ -24,6 +24,14 @@ export interface DeliveryResult {
   messageId: string | null;
 }
 
+/** Provider failure classification used to avoid retrying permanent 4xx errors. */
+export class NotificationDeliveryError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'NotificationDeliveryError';
+  }
+}
+
 /**
  * The only thing the domain knows about delivery. Services emit events; nothing
  * in src/generated/reservations or src/generated/auth imports a concrete
@@ -47,16 +55,15 @@ import {
   NotificationProvider,
 } from '../notification-provider';
 
-/** Development provider: writes the message to the log and delivers nothing. */
+/** Development provider: records metadata only and never logs recipient data or message bodies. */
 @Injectable()
 export class LogNotificationProvider implements NotificationProvider {
   readonly id = 'log';
 
   private readonly logger = new Logger(LogNotificationProvider.name);
 
-  async send(message: NotificationMessage): Promise<DeliveryResult> {
-    this.logger.log(\`[notification] to=\${message.to} subject="\${message.subject}"\`);
-    this.logger.debug(message.text);
+  async send(_message: NotificationMessage): Promise<DeliveryResult> {
+    this.logger.log('[notification] accepted');
 
     return { providerId: this.id, messageId: null };
   }
@@ -103,11 +110,13 @@ export class MockNotificationProvider implements NotificationProvider {
 const RESEND_PROVIDER = `import { Injectable } from '@nestjs/common';
 import {
   DeliveryResult,
+  NotificationDeliveryError,
   NotificationMessage,
   NotificationProvider,
 } from '../notification-provider';
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+const REQUEST_TIMEOUT_MS = 10_000;
 
 interface ResendResponse {
   id?: string;
@@ -153,15 +162,20 @@ export class ResendNotificationProvider implements NotificationProvider {
         text: message.text,
         html: message.html,
       }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(\`Resend rejected the message (\${response.status}): \${body.slice(0, 200)}\`);
+      await response.body?.cancel();
+      const retryable = response.status === 429 || response.status >= 500;
+      throw new NotificationDeliveryError(
+        \`Resend rejected the message with status \${response.status}\`,
+        retryable,
+      );
     }
 
     const payload = (await response.json()) as ResendResponse;
-    return { providerId: this.id, messageId: payload.id ?? null };
+    return { providerId: this.id, messageId: typeof payload.id === 'string' ? payload.id : null };
   }
 }
 `;
@@ -242,6 +256,7 @@ function serviceFile(config: NotificationsConfig): string {
   return `import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   NOTIFICATION_PROVIDER,
+  NotificationDeliveryError,
   NotificationMessage,
   NotificationProvider,
 } from './notification-provider';
@@ -274,16 +289,18 @@ export class NotificationService {
         await this.provider.send(message);
         return true;
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
+        const retryable = !(error instanceof NotificationDeliveryError) || error.retryable;
 
-        if (attempt === MAX_ATTEMPTS) {
+        if (!retryable || attempt === MAX_ATTEMPTS) {
           this.logger.error(
-            \`Giving up on "\${message.subject}" for \${message.to} after \${attempt} attempt(s): \${reason}\`,
+            \`Notification delivery failed via \${this.provider.id} after \${attempt} attempt(s)\`,
           );
           return false;
         }
 
-        this.logger.warn(\`Attempt \${attempt} failed for \${message.to}: \${reason}\`);
+        this.logger.warn(
+          \`Notification delivery attempt \${attempt} failed via \${this.provider.id}; retrying\`,
+        );
         await delay(BASE_BACKOFF_MS * 2 ** (attempt - 1));
       }
     }
@@ -372,7 +389,7 @@ function listenerFile(config: NotificationsConfig, userEntity: string | null): s
     });
 
     if (account === null) {
-      this.logger.warn(\`No account \${userId}; dropping notification\`);
+      this.logger.warn('Notification recipient no longer exists; dropping notification');
       return null;
     }
 

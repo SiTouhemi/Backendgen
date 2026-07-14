@@ -142,7 +142,7 @@ function dtoFile(config: ReservationsConfig, reservation: NormalizedEntity): str
   const model = names.model(config.entity);
 
   return `import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsISO8601, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
 import type { ${model} } from '@prisma/client';
 import { PaginationQueryDto } from '../../common/pagination';
 
@@ -151,6 +151,7 @@ export const RESERVATION_STATUSES = ['HELD', 'CONFIRMED', 'CANCELLED', 'EXPIRED'
 export class Create${model}Dto {
   @ApiProperty({ description: 'Identifier of the ${config.resource} to reserve' })
   @IsString()
+  @MaxLength(128)
   resourceId!: string;
 
   @ApiProperty({
@@ -171,6 +172,7 @@ export class Create${model}Dto {
 export class Availability${model}QueryDto {
   @ApiProperty()
   @IsString()
+  @MaxLength(128)
   resourceId!: string;
 
   @ApiProperty({ format: 'date-time' })
@@ -191,6 +193,7 @@ export class Query${model}Dto extends PaginationQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(128)
   resourceId?: string;
 }
 
@@ -322,6 +325,12 @@ export class ${model}Service {
   ): Promise<${model}Dto> {
     const ownerId = requireUser(scope);${tenant ? "\n    const organizationId = requireOrganization(scope);" : ""}
 
+    if (idempotencyKey !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) {
+      throw new BadRequestException(
+        'Idempotency-Key must be 1-128 letters, numbers, dots, underscores, colons, or hyphens',
+      );
+    }
+
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
     this.assertValidInterval(startsAt, endsAt);
@@ -329,7 +338,9 @@ export class ${model}Service {
     await this.policy.validateRequest({ resourceId: dto.resourceId, ownerId, startsAt, endsAt });
 
     if (idempotencyKey !== undefined) {
-      const replayed = await this.prisma.${delegate}.findUnique({ where: { idempotencyKey } });
+      const replayed = await this.prisma.${delegate}.findFirst({
+        where: this.scopedWhere({ idempotencyKey }, scope),
+      });
 
       if (replayed !== null) {
         return to${model}(replayed);
@@ -339,7 +350,7 @@ export class ${model}Service {
     // Release holds that have timed out, so their intervals stop blocking this
     // request. The scheduled job does the same thing; doing it here as well
     // means a request never has to wait for the next tick.
-    await this.expireHolds();
+    await this.expireHolds(dto.resourceId);
 
     const resource = await this.prisma.${resourceDelegate}.findFirst({
       where: {
@@ -400,11 +411,15 @@ ${
       // Two identical requests raced on the same idempotency key: the loser
       // returns what the winner created rather than an error.
       if (isUniqueViolation(error) && idempotencyKey !== undefined) {
-        const existing = await this.prisma.${delegate}.findUnique({ where: { idempotencyKey } });
+        const existing = await this.prisma.${delegate}.findFirst({
+          where: this.scopedWhere({ idempotencyKey }, scope),
+        });
 
         if (existing !== null) {
           return to${model}(existing);
         }
+
+        throw new ConflictException('That idempotency key is already in use');
       }
 
       throw error;
@@ -418,7 +433,7 @@ ${
     const endsAt = new Date(query.endsAt);
     this.assertValidInterval(startsAt, endsAt);
 
-    await this.expireHolds();
+    await this.expireHolds(query.resourceId);
 
     const conflicts = await this.prisma.${delegate}.count({
       where: {
@@ -463,6 +478,7 @@ ${
 
   async confirm(id: string, scope: RequestScope): Promise<${model}Dto> {
     const reservation = await this.require(id, scope);
+    const now = new Date();
 
     if (reservation.status !== 'HELD') {
       throw new ConflictException(
@@ -470,19 +486,30 @@ ${
       );
     }
 
-    if (reservation.holdExpiresAt !== null && reservation.holdExpiresAt.getTime() <= Date.now()) {
-      await this.prisma.${delegate}.update({
-        where: { id },
+    if (reservation.holdExpiresAt !== null && reservation.holdExpiresAt <= now) {
+      await this.prisma.${delegate}.updateMany({
+        where: this.scopedWhere({ id, status: 'HELD', holdExpiresAt: { lte: now } }, scope),
         data: { status: 'EXPIRED', holdExpiresAt: null },
       });
 
       throw new ConflictException('The hold on this reservation has expired');
     }
 
-    const confirmed = await this.prisma.${delegate}.update({
-      where: { id },
-      data: { status: 'CONFIRMED', confirmedAt: new Date(), holdExpiresAt: null },
+    const [confirmed] = await this.prisma.${delegate}.updateManyAndReturn({
+      where: this.scopedWhere(
+        {
+          id,
+          status: 'HELD',
+          OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }],
+        },
+        scope,
+      ),
+      data: { status: 'CONFIRMED', confirmedAt: now, holdExpiresAt: null },
     });
+
+    if (confirmed === undefined) {
+      throw new ConflictException('The reservation changed before it could be confirmed');
+    }
 
     this.events.emit('reservation.confirmed', {
       reservationId: confirmed.id,
@@ -508,10 +535,14 @@ ${
       throw new ConflictException('This reservation can no longer be cancelled');
     }
 
-    const cancelled = await this.prisma.${delegate}.update({
-      where: { id },
+    const [cancelled] = await this.prisma.${delegate}.updateManyAndReturn({
+      where: this.scopedWhere({ id, status: { in: ['HELD', 'CONFIRMED'] } }, scope),
       data: { status: 'CANCELLED', cancelledAt: new Date(), holdExpiresAt: null },
     });
+
+    if (cancelled === undefined) {
+      throw new ConflictException('The reservation changed before it could be cancelled');
+    }
 
     this.events.emit('reservation.cancelled', {
       reservationId: cancelled.id,
@@ -523,19 +554,31 @@ ${
   }
 
   /** Moves timed-out holds to EXPIRED. Idempotent, so concurrent runs are safe. */
-  async expireHolds(): Promise<number> {
-    const expired = await this.prisma.${delegate}.findMany({
-      where: { status: 'HELD', holdExpiresAt: { lte: new Date() } },
-      select: { id: true, resourceId: true, ownerId: true },
+  async expireHolds(resourceId?: string): Promise<number> {
+    const now = new Date();
+    const candidates = await this.prisma.${delegate}.findMany({
+      where: {
+        status: 'HELD',
+        holdExpiresAt: { lte: now },
+        ...(resourceId !== undefined ? { resourceId } : {}),
+      },
+      select: { id: true },
+      orderBy: { holdExpiresAt: 'asc' },
+      take: 100,
     });
 
-    if (expired.length === 0) {
+    if (candidates.length === 0) {
       return 0;
     }
 
-    const result = await this.prisma.${delegate}.updateMany({
-      where: { id: { in: expired.map((row) => row.id) }, status: 'HELD' },
+    const expired = await this.prisma.${delegate}.updateManyAndReturn({
+      where: {
+        id: { in: candidates.map((row) => row.id) },
+        status: 'HELD',
+        holdExpiresAt: { lte: now },
+      },
       data: { status: 'EXPIRED', holdExpiresAt: null },
+      select: { id: true, resourceId: true, ownerId: true },
     });
 
     for (const row of expired) {
@@ -546,8 +589,8 @@ ${
       });
     }
 
-    this.logger.log(\`Expired \${result.count} hold(s)\`);
-    return result.count;
+    this.logger.log(\`Expired \${expired.length} hold(s)\`);
+    return expired.length;
   }
 
   private assertValidInterval(startsAt: Date, endsAt: Date): void {
@@ -575,6 +618,10 @@ ${
   }
 
   private async require(id: string, scope: RequestScope) {
+    if (id.length === 0 || id.length > 128) {
+      throw new BadRequestException('Invalid reservation identifier');
+    }
+
     const reservation = await this.prisma.${delegate}.findFirst({
       where: this.scopedWhere({ id }, scope),
     });
@@ -737,7 +784,11 @@ export class HoldExpiryJob {
     try {
       await this.reservations.expireHolds();
     } catch (error) {
-      this.logger.error('Hold expiry failed', error instanceof Error ? error.stack : String(error));
+      const stack =
+        process.env.NODE_ENV === 'production' || !(error instanceof Error)
+          ? undefined
+          : error.stack;
+      this.logger.error('Hold expiry failed', stack);
     }
   }
 }
@@ -804,6 +855,7 @@ describe('${model}Service', () => {
     findUnique: jest.fn(),
     findMany: jest.fn(),
     updateMany: jest.fn(),
+    updateManyAndReturn: jest.fn(),
     update: jest.fn(),
     count: jest.fn(),
   };
@@ -859,7 +911,7 @@ describe('${model}Service', () => {
       createdAt: new Date('2025-01-01T09:00:00Z'),
     };
 
-    reservations.findUnique.mockResolvedValue(existing);
+    reservations.findFirst.mockResolvedValue(existing);
 
     const result = await service.create(
       {
