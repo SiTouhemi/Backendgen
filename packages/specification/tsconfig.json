@@ -6,5 +6,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/specification.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "schema/**/*.json"]
+  "include": ["src/**/*.ts", "schema/**/*.json"],
+  "references": [{ "path": "../common" }]
 }

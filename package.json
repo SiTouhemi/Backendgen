@@ -19,8 +19,9 @@
     "cli": "npm run build --silent && node apps/cli/dist/src/index.js",
     "validate:example": "npm run cli -- validate examples/hotel-booking/backend.yaml",
     "inspect:example": "npm run cli -- inspect examples/hotel-booking/backend.yaml",
-    "generate:example": "npm run cli -- generate examples/hotel-booking/backend.yaml --output ./generated/hotel-api",
+    "generate:example": "npm run build --silent && node apps/cli/dist/src/index.js generate examples/hotel-booking/backend.yaml --output ./generated/hotel-api",
     "mcp": "npm run build --silent && node apps/mcp-server/dist/src/index.js",
+    "verify:local:postgres": "powershell -ExecutionPolicy Bypass -File scripts/verify-local.ps1",
     "licenses": "node scripts/license-report.mjs",
     "benchmark:validate": "node benchmark/validate-results.mjs"
   },

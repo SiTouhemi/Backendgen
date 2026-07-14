@@ -53,6 +53,21 @@ describe("scenarios", () => {
     expect(paths).toContain(".env.example");
   });
 
+  it.each(SCENARIOS.map((scenario) => scenario.name))(
+    "pins every direct generated dependency for '%s'",
+    (name) => {
+      const { rendered } = compile(name);
+      const packageFile = rendered.files.find((file) => file.path === "package.json")!;
+      const manifest = JSON.parse(packageFile.contents) as {
+        dependencies: Record<string, string>;
+        devDependencies: Record<string, string>;
+      };
+      const versions = [...Object.values(manifest.dependencies), ...Object.values(manifest.devDependencies)];
+
+      expect(versions.every((version) => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))).toBe(true);
+    },
+  );
+
   it("basic-crud generates no authentication and no secret", () => {
     const { compiled, rendered } = compile("basic-crud");
 
@@ -75,6 +90,12 @@ describe("scenarios", () => {
     expect(user.fields.find((field) => field.name === "passwordHash")?.internal).toBe(true);
 
     expect(compiled.ir.secrets.map((secret) => secret.name)).toContain("JWT_ACCESS_SECRET");
+
+    const testEnvironment = rendered.files.find(
+      (file) => file.path === "test/utils/test-env.ts",
+    )!;
+    expect(testEnvironment.contents).toContain("JWT_ACCESS_SECRET");
+    expect(testEnvironment.contents).toContain("test-only-jwt-secret");
 
     const service = rendered.files.find(
       (file) => file.path === "src/generated/note/note.service.ts",
@@ -106,6 +127,17 @@ describe("scenarios", () => {
 
     const paths = rendered.files.map((file) => file.path);
     expect(paths).toContain("test/tenant-isolation.e2e-spec.ts");
+
+    const projectE2e = rendered.files.find(
+      (file) => file.path === "test/project.e2e-spec.ts",
+    )!;
+    expect(projectE2e.contents).toContain(".post('/api/organizations')");
+    expect(projectE2e.contents).toContain("'X-Organization-Id': organizationId");
+
+    const taskE2e = rendered.files.find((file) => file.path === "test/task.e2e-spec.ts")!;
+    expect(taskE2e.contents).toContain(
+      "createProject(prisma, { organizationId: organizationId })",
+    );
 
     const response = rendered.files.find(
       (file) => file.path === "src/generated/project/dto/project.response.dto.ts",

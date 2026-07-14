@@ -1,9 +1,8 @@
 /**
- * Dependency versions for generated projects. Versions are exact, not ranges:
- * two generations of the same specification must install the same dependency
- * tree even months apart, or the "generated output is tested output" claim
- * silently stops being true. Bumps happen here, in the compiler, where CI
- * re-runs every scenario against the new resolutions.
+ * Direct dependency versions for generated projects. Versions are exact, not
+ * ranges, so identical specifications emit identical package manifests. The
+ * first `npm install` creates package-lock.json; commit that file to freeze the
+ * complete transitive tree. Bumps happen here, where every scenario is retested.
  */
 export const BASE_DEPENDENCIES: Readonly<Record<string, string>> = {
   "@nestjs/common": "11.1.28",
@@ -25,10 +24,10 @@ export const BASE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
   "@nestjs/schematics": "11.1.0",
   "@nestjs/testing": "11.1.28",
   "@types/express": "5.0.6",
-  "@types/jest": "29.5.14",
+  "@types/jest": "30.0.0",
   "@types/node": "22.20.1",
   "@types/supertest": "6.0.3",
-  jest: "29.7.0",
+  jest: "30.4.2",
   prisma: "6.19.3",
   supertest: "7.2.2",
   "ts-jest": "29.4.11",

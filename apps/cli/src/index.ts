@@ -8,8 +8,8 @@ import {
   runGeneratedTests,
 } from "@backend-compiler/generator-runtime";
 import { loadSpecFile, validateSpec, type BackendSpec } from "@backend-compiler/specification";
-import { access, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { access, mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import {
   formatFeature,
   formatFeatures,
@@ -133,6 +133,31 @@ features:
 `;
 }
 
+function validateStarterProjectName(projectName: string): void {
+  const candidate: BackendSpec = {
+    specVersion: "backendcompiler.dev/v1",
+    project: { name: projectName },
+    target: { id: "nestjs-prisma", database: "postgresql" },
+    entities: {
+      Note: {
+        fields: {
+          title: { type: "string", required: true, maxLength: 200 },
+          body: "string",
+        },
+      },
+    },
+    features: { crud: {} },
+  };
+  const validation = validateSpec(candidate);
+
+  if (!validation.ok) {
+    throw new CliError(
+      `Invalid project name '${projectName}'`,
+      validation.issues.map((item) => ({ ...item, severity: "error" as const })),
+    );
+  }
+}
+
 async function loadAndValidate(filePath: string): Promise<{ path: string; spec: BackendSpec }> {
   const absolute = resolve(process.cwd(), filePath);
   const input = await loadSpecFile(absolute);
@@ -174,6 +199,8 @@ async function run(): Promise<void> {
         throw new CliError(`Refusing to overwrite existing file: ${destination}`);
       }
 
+      validateStarterProjectName(projectName);
+      await mkdir(dirname(destination), { recursive: true });
       await writeFile(destination, starterSpec(projectName), "utf8");
       write(
         json,

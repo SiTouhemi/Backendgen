@@ -29,14 +29,29 @@ Do **not** deploy the rewritten `_init` migration. Create an incremental migrati
    ```sh
    git checkout -- prisma/migrations/00000000000000_init/migration.sql
    ```
-3. Generate the incremental step from the diff between the deployed history and the new schema:
+3. Create a separate empty PostgreSQL database for Prisma's shadow database and
+   export its URL. Prisma requires this when a migration directory is a diff
+   source:
    ```sh
+   export SHADOW_DATABASE_URL="postgresql://user:password@localhost:5432/my_api_shadow"
+   ```
+4. Generate the incremental SQL into a temporary file. Do not create the new
+   migration directory until after the diff, or Prisma may interpret the empty
+   directory as part of the existing migration history:
+   ```sh
+   migration_sql="$(mktemp)"
    npx prisma migrate diff \
      --from-migrations prisma/migrations \
      --to-schema-datamodel prisma/schema.prisma \
-     --script > prisma/migrations/$(date +%Y%m%d%H%M%S)_update/migration.sql
+     --shadow-database-url "$SHADOW_DATABASE_URL" \
+     --script \
+     --output "$migration_sql"
+
+   migration_dir="prisma/migrations/$(date +%Y%m%d%H%M%S)_update"
+   mkdir -p "$migration_dir"
+   mv "$migration_sql" "$migration_dir/migration.sql"
    ```
-4. Review the SQL — especially drops and type changes — then deploy:
+5. Review the SQL — especially drops and type changes — then deploy:
    ```sh
    npx prisma migrate deploy
    ```

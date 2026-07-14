@@ -909,10 +909,14 @@ function e2eFile(entity: NormalizedEntity, context: TargetRenderContext): string
 
   const payloadKeys = writableForeignKeys(entity)
     .filter((key) => key.required)
-    .map(
-      (key) =>
-        `  payload.${key.name} = (await create${names.model(key.target)}(prisma)).id;`,
-    );
+    .map((key) => {
+      const target = context.ir.entities.find((candidate) => candidate.name === key.target);
+      const tenantOverride = target?.tenant
+        ? `, { ${target.tenant.foreignKey}: organizationId }`
+        : "";
+
+      return `  payload.${key.name} = (await create${names.model(key.target)}(prisma${tenantOverride})).id;`;
+    });
 
   const factoryImports = [
     ...new Set(
@@ -922,12 +926,27 @@ function e2eFile(entity: NormalizedEntity, context: TargetRenderContext): string
     ),
   ].sort();
 
-  const authImport = authenticated
-    ? "import { authHeaders } from './utils/auth-helper';\n"
-    : "";
-  const headerSetup = authenticated
-    ? "    headers = await authHeaders(app, prisma, { role: 'admin' });"
-    : "    headers = {};";
+  const tenantScoped = entity.tenant !== null;
+  const authImport = tenantScoped
+    ? "import { registerAccount } from './utils/auth-helper';\n"
+    : authenticated
+      ? "import { authHeaders } from './utils/auth-helper';\n"
+      : "";
+  const headerSetup = tenantScoped
+    ? `    const account = await registerAccount(app, prisma, { role: 'admin' });
+    const organization = await request(app.getHttpServer())
+      .post('/${prefix}/organizations')
+      .set('Authorization', \`Bearer \${account.accessToken}\`)
+      .send({ name: uniqueString(24) })
+      .expect(201);
+    organizationId = organization.body.id as string;
+    headers = {
+      Authorization: \`Bearer \${account.accessToken}\`,
+      'X-Organization-Id': organizationId,
+    };`
+    : authenticated
+      ? "    headers = await authHeaders(app, prisma, { role: 'admin' });"
+      : "    headers = {};";
 
   return `import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -943,6 +962,7 @@ describe('${model} (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let headers: Record<string, string>;
+${tenantScoped ? "  let organizationId: string;\n" : ""}
 
   beforeAll(async () => {
     ({ app, prisma } = await createTestApp());

@@ -1,10 +1,12 @@
 import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import formatsModule, { type FormatsPlugin } from "ajv-formats";
+import { camelCase, pascalCase, pluralize } from "@backend-compiler/common";
 import schema from "../schema/backend-spec.v1.schema.json" with { type: "json" };
 import type {
   BackendSpec,
   EntityDefinition,
   FieldOptions,
+  RelationDefinition,
   ValidationIssue,
   ValidationResult,
 } from "./types.js";
@@ -27,18 +29,60 @@ function schemaIssue(error: ErrorObject): ValidationIssue {
   };
 }
 
-/** Mirrors `camelCase` in @backend-compiler/common, which derives foreign-key names. */
-function camelCaseIdentifier(value: string): string {
-  const parts = value
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .split(/[^A-Za-z0-9]+/)
-    .filter((part) => part.length > 0)
-    .map((part) => part.toLowerCase());
+function defaultInverseName(sourceEntity: string, type: RelationDefinition["type"]): string {
+  const singular = camelCase(sourceEntity);
+  return type === "belongsTo" || type === "manyToMany" ? pluralize(singular) : singular;
+}
 
-  return parts
-    .map((part, index) => (index === 0 ? part : part[0]!.toUpperCase() + part.slice(1)))
-    .join("");
+/**
+ * Derives the scalar foreign-key fields created by relation normalization.
+ * This intentionally mirrors the compiler's relation-name collision rules so
+ * schema validation and compilation accept exactly the same index fields.
+ */
+function deriveRelationForeignKeys(
+  entities: BackendSpec["entities"],
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const foreignKeys = new Map<string, Set<string>>(
+    Object.keys(entities).map((name) => [name, new Set<string>()]),
+  );
+  const takenNames = new Map<string, Set<string>>(
+    Object.entries(entities).map(([name, entity]) => [
+      name,
+      new Set([
+        ...Object.keys(entity.fields),
+        ...(entity.relations ?? []).map((relation) => relation.name),
+      ]),
+    ]),
+  );
+
+  const sortedEntities = Object.entries(entities).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+
+  for (const [sourceName, entity] of sortedEntities) {
+    const relations = [...(entity.relations ?? [])].sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
+
+    for (const relation of relations) {
+      const targetTaken = takenNames.get(relation.target);
+      if (targetTaken === undefined) continue;
+
+      let inverseName = defaultInverseName(sourceName, relation.type);
+      if (targetTaken.has(inverseName)) {
+        inverseName = `${inverseName}Via${pascalCase(relation.name)}`;
+      }
+      targetTaken.add(inverseName);
+
+      if (relation.type === "belongsTo" || relation.type === "hasOne") {
+        foreignKeys.get(sourceName)!.add(`${camelCase(relation.name)}Id`);
+      } else if (relation.type === "hasMany") {
+        foreignKeys.get(relation.target)!.add(`${camelCase(inverseName)}Id`);
+      }
+    }
+  }
+
+  return foreignKeys;
 }
 
 function fieldOptions(field: string | FieldOptions): FieldOptions {
@@ -49,6 +93,7 @@ function validateEntitySemantics(
   name: string,
   entity: EntityDefinition,
   entityNames: Set<string>,
+  relationForeignKeys: ReadonlySet<string>,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -90,12 +135,6 @@ function validateEntitySemantics(
       });
     }
   }
-
-  // The compiler materializes a foreign-key column for each declared relation,
-  // and indexes may reference it. Accept here what the compiler accepts.
-  const relationForeignKeys = new Set(
-    (entity.relations ?? []).map((relation) => `${camelCaseIdentifier(relation.name)}Id`),
-  );
 
   for (const [indexPosition, index] of (entity.indexes ?? []).entries()) {
     for (const fieldName of index.fields) {
@@ -155,8 +194,9 @@ export function validateSpec(input: unknown): ValidationResult {
 
   const spec = input as BackendSpec;
   const entityNames = new Set(Object.keys(spec.entities));
+  const relationForeignKeys = deriveRelationForeignKeys(spec.entities);
   const issues = Object.entries(spec.entities).flatMap(([name, entity]) =>
-    validateEntitySemantics(name, entity, entityNames),
+    validateEntitySemantics(name, entity, entityNames, relationForeignKeys.get(name) ?? new Set()),
   );
   issues.push(...validateFeatureSemantics(spec));
 

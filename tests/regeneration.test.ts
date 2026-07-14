@@ -173,6 +173,28 @@ describe("safe regeneration", () => {
     );
   });
 
+  it("fails clearly and without writing when a corrupt manifest destroys ownership", async () => {
+    await generate();
+    const generatedPath = join(output, GENERATED_FILE);
+    const before = await readFile(generatedPath, "utf8");
+
+    const manifestPath = join(output, ".backendgen/manifest.json");
+    await writeFile(manifestPath, "{ not json", "utf8");
+
+    const result = await generate({ force: true });
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          code: "generate.invalid-manifest",
+          path: "/.backendgen/manifest.json",
+        }),
+      ],
+    });
+    await expect(readFile(generatedPath, "utf8")).resolves.toBe(before);
+  });
+
   it("removes a file that is no longer generated", async () => {
     await generateBackend({
       spec: scenarioSpec("basic-crud"),

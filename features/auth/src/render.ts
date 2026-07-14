@@ -1269,6 +1269,9 @@ export const authRenderer: FeatureTargetRenderer = {
             "HMAC key for access tokens. Minimum 32 characters. The application refuses to start without it.",
         },
       ],
+      testEnv: {
+        JWT_ACCESS_SECRET: "test-only-jwt-secret-with-at-least-32-characters",
+      },
     };
   },
 };

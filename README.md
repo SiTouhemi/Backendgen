@@ -8,7 +8,7 @@ Version 0.2.0 includes CRUD, authentication, organizations and tenant isolation,
 
 - Node.js 22+
 - npm 10+
-- PostgreSQL 16 for generated integration tests
+- PostgreSQL 16+ server tools for generated integration tests
 
 ## Quick start
 
@@ -17,10 +17,13 @@ npm ci
 npm test
 npm run validate:example
 npm run generate:example
-node apps/cli/dist/src/index.js test-generated --output generated/hotel-api --install
+npm run verify:local:postgres
 ```
 
-`test-generated` forwards `DATABASE_URL` into the generated project; export it first (Prisma needs it even to validate the schema — a placeholder PostgreSQL URL is enough for the unit suite).
+`verify:local:postgres` creates and removes a disposable local database cluster.
+It does not touch an existing PostgreSQL installation or application database.
+For `test-generated`, export `DATABASE_URL` first; the command forwards it into
+the generated project, and Prisma requires it even for schema validation.
 
 Or start from scratch:
 
@@ -47,7 +50,9 @@ node apps/cli/dist/src/index.js generate examples/hotel-booking/backend.yaml --o
 | `npm run licenses` | Regenerate the deterministic third-party license report. |
 | `npm run benchmark:validate` | Validate benchmark result files without inventing measurements. |
 
-For PostgreSQL-backed E2E, export `DATABASE_URL` and `BACKENDGEN_E2E_BUILD=1`. CI runs all six scenarios this way.
+For repeatable PostgreSQL-backed E2E, run `npm run verify:local:postgres`. To
+target an existing database instead, export `DATABASE_URL` and
+`BACKENDGEN_E2E_BUILD=1` before `npm run test:e2e`.
 
 ## Safety and customization
 
@@ -55,6 +60,6 @@ Generated files and user code are separated. Files marked `generated` in `.backe
 
 Regenerating after an entity change rewrites the initial migration; read [migrations and schema evolution](docs/MIGRATIONS.md) before deploying over an applied migration.
 
-Start with [the architecture](docs/ARCHITECTURE.md), [specification reference](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [customization](docs/CUSTOMIZATION.md), [migrations](docs/MIGRATIONS.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), [threat model](docs/THREAT_MODEL.md), and [latest generated-code security review](docs/SECURITY_REVIEW_2026-07-14.md).
+Start with [the architecture](docs/ARCHITECTURE.md), [specification reference](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [customization](docs/CUSTOMIZATION.md), [migrations](docs/MIGRATIONS.md), [local release testing](docs/LOCAL_TESTING.md), [local verification record](docs/LOCAL_VERIFICATION.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), [threat model](docs/THREAT_MODEL.md), and [latest generated-code security review](docs/SECURITY_REVIEW_2026-07-14.md).
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

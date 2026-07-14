@@ -1344,7 +1344,7 @@ export const reservationsRenderer: FeatureTargetRenderer = {
           order: 30,
         },
       ],
-      packageDependencies: holds ? { "@nestjs/schedule": "^5.0.0" } : {},
+      packageDependencies: holds ? { "@nestjs/schedule": "5.0.1" } : {},
       migrationSql: overlapSql(config),
     };
   },

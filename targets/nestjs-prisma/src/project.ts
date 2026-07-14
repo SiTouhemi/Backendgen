@@ -669,6 +669,9 @@ npm run db:deploy
 npm run start:dev
 \`\`\`
 
+The first \`npm install\` creates \`package-lock.json\`. Commit that lockfile and
+use \`npm ci\` in automation to reproduce the complete tested dependency tree.
+
 The API listens on port ${settings.port}. Set \`SWAGGER_ENABLED=true\` to serve
 OpenAPI documentation at \`/${settings.apiPrefix}/docs\`. It is disabled by default
 in \`.env.example\` and whenever \`NODE_ENV=production\`. The

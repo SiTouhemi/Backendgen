@@ -88,6 +88,44 @@ describe("validateSpec", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts a hasMany foreign-key index only on the derived owning entity", () => {
+    const input = validSpec();
+    input.entities.Room.relations = [{ name: "members", type: "hasMany", target: "User" }];
+    Object.assign(input.entities.User, { indexes: [{ fields: ["roomId"] }] });
+
+    expect(validateSpec(input).ok).toBe(true);
+
+    Object.assign(input.entities.Room, { indexes: [{ fields: ["membersId"] }] });
+    const invalid = validateSpec(input);
+
+    expect(invalid).toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "semantic.unknown-index-field" })],
+    });
+  });
+
+  it("matches compiler inverse-name collision handling for hasMany indexes", () => {
+    const input = validSpec();
+    input.entities.Room.relations = [{ name: "members", type: "hasMany", target: "User" }];
+    input.entities.User.fields.room = "string";
+    Object.assign(input.entities.User, { indexes: [{ fields: ["roomViaMembersId"] }] });
+
+    expect(validateSpec(input).ok).toBe(true);
+  });
+
+  it("does not invent scalar foreign keys for many-to-many relations", () => {
+    const input = validSpec();
+    input.entities.Room.relations = [{ name: "members", type: "manyToMany", target: "User" }];
+    Object.assign(input.entities.Room, { indexes: [{ fields: ["membersId"] }] });
+
+    const result = validateSpec(input);
+
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "semantic.unknown-index-field" })],
+    });
+  });
+
   it("accepts holdMinutes 0, which disables holds", () => {
     const input = validSpec();
     input.features = {

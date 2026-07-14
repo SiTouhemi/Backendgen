@@ -1,9 +1,24 @@
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
 const cli = resolve(root, "apps/cli/dist/src/index.js");
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+});
+
+async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "backendgen-cli-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
 
 function run(args: string[]) {
   return spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: "utf8" });
@@ -30,5 +45,41 @@ describe("backendgen subprocess contract", () => {
     ]);
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true, outputPath: output });
+  });
+
+  it("initializes a valid nested starter specification and refuses to overwrite it", async () => {
+    const directory = await temporaryDirectory();
+    const output = join(directory, "nested", "backend.yaml");
+
+    const initialized = run(["init", output, "--name", "local-demo", "--json"]);
+    expect(initialized.status).toBe(0);
+    expect(JSON.parse(initialized.stdout)).toEqual({ created: output });
+    await expect(readFile(output, "utf8")).resolves.toContain("name: local-demo");
+
+    const validated = run(["validate", output, "--json"]);
+    expect(validated.status).toBe(0);
+    expect(JSON.parse(validated.stdout)).toMatchObject({ valid: true });
+
+    const overwrite = run(["init", output, "--name", "local-demo", "--json"]);
+    expect(overwrite.status).toBe(1);
+    expect(JSON.parse(overwrite.stdout)).toMatchObject({
+      success: false,
+      error: expect.stringContaining("Refusing to overwrite"),
+    });
+  });
+
+  it("rejects an invalid init project name without creating a file", async () => {
+    const directory = await temporaryDirectory();
+    const output = join(directory, "backend.yaml");
+
+    const result = run(["init", output, "--name", "Invalid Name", "--json"]);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: false,
+      error: "Invalid project name 'Invalid Name'",
+      issues: [expect.objectContaining({ code: "schema.pattern", path: "/project/name" })],
+    });
+    await expect(access(output)).rejects.toThrow();
   });
 });

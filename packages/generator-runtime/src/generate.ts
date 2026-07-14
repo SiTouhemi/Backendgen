@@ -134,11 +134,20 @@ export async function generateBackend(options: GenerateOptions): Promise<Generat
   });
 
   if (manifestState.status === "invalid") {
-    plan.warnings.unshift(
+    const message =
       `${MANIFEST_PATH} exists but is not a valid generation manifest. ` +
-        "Existing files are treated as untracked; regenerate into a clean directory " +
-        "or restore the manifest from version control.",
-    );
+      "Generation cannot safely determine file ownership. Regenerate into a clean directory " +
+      "or restore the manifest from version control.";
+    plan.warnings.unshift(message);
+
+    // A corrupt manifest destroys the ownership boundary. Refuse even with
+    // --force: otherwise user-edited files at generated paths could be lost.
+    if (!dryRun) {
+      return {
+        ok: false,
+        issues: [issue("generate.invalid-manifest", `/${MANIFEST_PATH}`, message)],
+      };
+    }
   }
 
   const report = buildReport({
