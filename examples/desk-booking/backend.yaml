@@ -49,6 +49,8 @@ features:
 
   auth:
     roles: [admin, member]
+    emailVerification: false
+    passwordReset: false
 
   organizations:
     roles: [owner, admin, member]

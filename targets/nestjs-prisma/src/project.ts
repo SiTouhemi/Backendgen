@@ -22,9 +22,11 @@ const TSCONFIG = `{
     "baseUrl": "./",
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true,
-    "strictBindCallApply": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
@@ -260,6 +262,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
         return 'CONFLICT';
       case HttpStatus.TOO_MANY_REQUESTS:
         return 'RATE_LIMITED';
+      case HttpStatus.SERVICE_UNAVAILABLE:
+        return 'SERVICE_UNAVAILABLE';
       default:
         return 'ERROR';
     }
@@ -267,17 +271,28 @@ export class HttpExceptionFilter implements ExceptionFilter {
 }
 `;
 
-const PAGINATION = `import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+const PAGINATION = `import { applyDecorators, type Type as ClassRef } from '@nestjs/common';
+import {
+  ApiExtraModels,
+  ApiOkResponse,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class PaginationQueryDto {
-  @ApiPropertyOptional({ minimum: 1, maximum: 1000000, default: 1 })
+  /**
+   * Offset pagination is bounded: deep offsets scan and discard every earlier
+   * row. Filter or sort to reach older records instead of paging to them.
+   */
+  @ApiPropertyOptional({ minimum: 1, maximum: 1000, default: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(1000000)
+  @Max(1000)
   page: number = 1;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })
@@ -317,6 +332,28 @@ export function toPage<T>(data: T[], total: number, page: number, pageSize: numb
     },
   };
 }
+
+/**
+ * OpenAPI schema for the { data, meta } envelope every list endpoint returns.
+ * Generated clients see the real response shape, not a bare array.
+ */
+export function ApiPaginatedResponse<TModel extends ClassRef<unknown>>(
+  model: TModel,
+): MethodDecorator {
+  return applyDecorators(
+    ApiExtraModels(PageMetaDto, model),
+    ApiOkResponse({
+      schema: {
+        type: 'object',
+        required: ['data', 'meta'],
+        properties: {
+          data: { type: 'array', items: { $ref: getSchemaPath(model) } },
+          meta: { $ref: getSchemaPath(PageMetaDto) },
+        },
+      },
+    }),
+  );
+}
 `;
 
 const PUBLIC_DECORATOR = `import { SetMetadata } from '@nestjs/common';
@@ -331,26 +368,48 @@ export const IS_PUBLIC_KEY = 'backendgen:isPublic';
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(IS_PUBLIC_KEY, true);
 `;
 
-const HEALTH_CONTROLLER = `import { Controller, Get } from '@nestjs/common';
-import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
+const HEALTH_CONTROLLER = `import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { ApiOkResponse, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from '../common/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * Liveness answers "is this process running"; readiness answers "can it serve
+ * traffic". Orchestrators restart on failed liveness and stop routing on
+ * failed readiness, so the two must never be conflated: a database outage
+ * should drain traffic, not restart every API instance.
+ */
 @ApiTags('health')
 @Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
 
-  @Get()
-  @ApiOkResponse({ description: 'Liveness and database readiness' })
-  async check(): Promise<{ status: string; database: string }> {
+  @Get('live')
+  @ApiOkResponse({ description: 'The process is up and serving HTTP' })
+  live(): { status: string } {
+    return { status: 'ok' };
+  }
+
+  @Get('ready')
+  @ApiOkResponse({ description: 'Every required dependency is reachable' })
+  @ApiServiceUnavailableResponse({ description: 'The database is unreachable' })
+  async ready(): Promise<{ status: string; database: string }> {
     try {
       await this.prisma.$queryRaw\`SELECT 1\`;
-      return { status: 'ok', database: 'up' };
     } catch {
-      return { status: 'degraded', database: 'down' };
+      throw new ServiceUnavailableException('Database is unreachable');
     }
+
+    return { status: 'ok', database: 'up' };
+  }
+
+  /** Kept for compatibility; equivalent to /health/ready. */
+  @Get()
+  @ApiOkResponse({ description: 'Alias of /health/ready' })
+  @ApiServiceUnavailableResponse({ description: 'The database is unreachable' })
+  check(): Promise<{ status: string; database: string }> {
+    return this.ready();
   }
 }
 `;
@@ -363,6 +422,107 @@ import { HealthController } from './health.controller';
 })
 export class HealthModule {}
 `;
+
+function healthE2e(context: TargetRenderContext): string {
+  const prefix = context.settings.apiPrefix;
+  return `import { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/generated/common/bootstrap';
+import { PrismaService } from '../src/generated/prisma/prisma.service';
+
+describe('health (e2e)', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleRef.createNestApplication({ bodyParser: false });
+    configureApp(app);
+    await app.init();
+    prisma = app.get(PrismaService);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('separates process liveness from database readiness', async () => {
+    await request(app.getHttpServer())
+      .get('/${prefix}/health/live')
+      .expect(200)
+      .expect({ status: 'ok' });
+
+    await request(app.getHttpServer())
+      .get('/${prefix}/health/ready')
+      .expect(200)
+      .expect({ status: 'ok', database: 'up' });
+  });
+
+  it('returns 503 when the database readiness check fails', async () => {
+    const query = jest.spyOn(prisma, '$queryRaw').mockRejectedValueOnce(new Error('test outage'));
+    try {
+      const response = await request(app.getHttpServer())
+        .get('/${prefix}/health/ready')
+        .expect(503);
+      expect(response.body).toMatchObject({
+        statusCode: 503,
+        code: 'SERVICE_UNAVAILABLE',
+        message: ['Database is unreachable'],
+      });
+    } finally {
+      query.mockRestore();
+    }
+  });
+});
+`;
+}
+
+function openApiE2e(context: TargetRenderContext): string | null {
+  const endpoint = context.ir.endpoints.find(
+    (candidate) => candidate.feature === "crud" && candidate.operation === "list",
+  );
+  if (endpoint === undefined) return null;
+
+  const path = `/${context.settings.apiPrefix}${endpoint.path}`;
+  return `import { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { AppModule } from '../src/app.module';
+import { configureApp, createOpenApiDocument } from '../src/generated/common/bootstrap';
+
+describe('OpenAPI document (e2e)', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleRef.createNestApplication({ bodyParser: false });
+    configureApp(app);
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('describes paginated CRUD responses as data and meta', () => {
+    const document = createOpenApiDocument(app);
+    const response = document.paths[${JSON.stringify(path)}]?.get?.responses['200'] as
+      | { content?: Record<string, { schema?: unknown }> }
+      | undefined;
+
+    expect(response?.content?.['application/json']?.schema).toMatchObject({
+      type: 'object',
+      required: ['data', 'meta'],
+      properties: {
+        data: { type: 'array' },
+        meta: { '$ref': expect.stringContaining('PageMetaDto') },
+      },
+    });
+  });
+});
+`;
+}
 
 const CUSTOM_MODULE = `import { Module } from '@nestjs/common';
 
@@ -397,7 +557,7 @@ what a regeneration would change.
 function bootstrapHelper(context: TargetRenderContext): string {
   const { settings } = context;
   return `import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
 import type { Express } from 'express';
 import { json, urlencoded } from 'express';
 import helmet from 'helmet';
@@ -436,7 +596,7 @@ export function configureApp(app: INestApplication, options: AppSecurityOptions 
   );
 }
 
-export function setupOpenApi(app: INestApplication): void {
+export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
   const config = new DocumentBuilder()
     .setTitle('${context.ir.project.name}')
     .setDescription(${JSON.stringify(context.ir.project.description ?? "Generated by backendgen")})
@@ -444,7 +604,11 @@ export function setupOpenApi(app: INestApplication): void {
     .addBearerAuth()
     .build();
 
-  SwaggerModule.setup('${settings.apiPrefix}/docs', app, SwaggerModule.createDocument(app, config));
+  return SwaggerModule.createDocument(app, config);
+}
+
+export function setupOpenApi(app: INestApplication): void {
+  SwaggerModule.setup('${settings.apiPrefix}/docs', app, createOpenApiDocument(app));
 }
 `;
 }
@@ -571,6 +735,8 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 USER node
 EXPOSE ${context.settings.port}
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \\
+  CMD ["node", "-e", "fetch('http://127.0.0.1:${context.settings.port}/${context.settings.apiPrefix}/health/live').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 CMD ["node", "dist/main"]
 `;
 }
@@ -674,8 +840,12 @@ use \`npm ci\` in automation to reproduce the complete tested dependency tree.
 
 The API listens on port ${settings.port}. Set \`SWAGGER_ENABLED=true\` to serve
 OpenAPI documentation at \`/${settings.apiPrefix}/docs\`. It is disabled by default
-in \`.env.example\` and whenever \`NODE_ENV=production\`. The
-\`/${settings.apiPrefix}/health\` endpoint reports database readiness.
+in \`.env.example\` and whenever \`NODE_ENV=production\`.
+
+\`/${settings.apiPrefix}/health/live\` confirms the process is up;
+\`/${settings.apiPrefix}/health/ready\` returns 503 while the database is
+unreachable. Point orchestrator liveness probes at the former and readiness
+probes (and load balancers) at the latter.
 
 ## Commands
 
@@ -733,6 +903,7 @@ instants that include an offset (for example \`2025-01-01T10:00:00Z\`).
 }
 
 export function projectFiles(context: TargetRenderContext): RenderedFile[] {
+  const openApiTest = openApiE2e(context);
   return [
     generated("tsconfig.json", TSCONFIG),
     generated("tsconfig.build.json", TSCONFIG_BUILD),
@@ -755,6 +926,10 @@ export function projectFiles(context: TargetRenderContext): RenderedFile[] {
     generated("src/generated/prisma/prisma.module.ts", PRISMA_MODULE),
     generated("src/generated/health/health.controller.ts", HEALTH_CONTROLLER),
     generated("src/generated/health/health.module.ts", HEALTH_MODULE),
+    generated("test/health.e2e-spec.ts", healthE2e(context)),
+    ...(openApiTest === null
+      ? []
+      : [generated("test/openapi.e2e-spec.ts", openApiTest)]),
     scaffold("src/custom/custom.module.ts", CUSTOM_MODULE),
     scaffold("src/custom/README.md", CUSTOM_README),
   ];

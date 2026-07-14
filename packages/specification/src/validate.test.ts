@@ -62,6 +62,93 @@ describe("validateSpec", () => {
     });
   });
 
+  it("accepts every supported referential action on compatible relations", () => {
+    const input = validSpec();
+    input.entities.Room.relations = [
+      {
+        name: "requiredOwner",
+        type: "belongsTo",
+        target: "User",
+        required: true,
+        onDelete: "restrict",
+      },
+      {
+        name: "cascadingOwner",
+        type: "belongsTo",
+        target: "User",
+        required: true,
+        onDelete: "cascade",
+      },
+      {
+        name: "optionalOwner",
+        type: "belongsTo",
+        target: "User",
+        onDelete: "setNull",
+      },
+      { name: "members", type: "hasMany", target: "User", onDelete: "setNull" },
+    ];
+
+    expect(validateSpec(input).ok).toBe(true);
+  });
+
+  it("rejects setNull on a required owning relation", () => {
+    const input = validSpec();
+    input.entities.Room.relations = [
+      {
+        name: "owner",
+        type: "belongsTo",
+        target: "User",
+        required: true,
+        onDelete: "setNull",
+      },
+    ];
+
+    expect(validateSpec(input)).toMatchObject({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          code: "semantic.set-null-requires-optional-relation",
+          path: "/entities/Room/relations/owner/onDelete",
+        }),
+      ],
+    });
+  });
+
+  it("rejects meaningless collection relation options with stable codes", () => {
+    const requiredCollection = validSpec();
+    requiredCollection.entities.Room.relations = [
+      { name: "members", type: "hasMany", target: "User", required: false },
+    ];
+    expect(validateSpec(requiredCollection)).toMatchObject({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          code: "semantic.collection-relation-required-unsupported",
+          path: "/entities/Room/relations/members/required",
+        }),
+      ],
+    });
+
+    const manyToManyDelete = validSpec();
+    manyToManyDelete.entities.Room.relations = [
+      {
+        name: "members",
+        type: "manyToMany",
+        target: "User",
+        onDelete: "cascade",
+      },
+    ];
+    expect(validateSpec(manyToManyDelete)).toMatchObject({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          code: "semantic.many-to-many-on-delete-unsupported",
+          path: "/entities/Room/relations/members/onDelete",
+        }),
+      ],
+    });
+  });
+
   it("rejects indexes that reference missing fields", () => {
     const input = validSpec();
     Object.assign(input.entities.Room, { indexes: [{ fields: ["missing"] }] });
@@ -135,6 +222,31 @@ describe("validateSpec", () => {
     const result = validateSpec(input);
 
     expect(result.ok).toBe(true);
+  });
+
+  it("requires a delivery path for enabled auth recovery flows", () => {
+    const input = validSpec();
+    input.features = { crud: {}, auth: {} };
+
+    expect(validateSpec(input)).toMatchObject({
+      ok: false,
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          code: "semantic.auth-recovery-undeliverable",
+          path: "/features/auth/emailVerification",
+        }),
+        expect.objectContaining({
+          code: "semantic.auth-recovery-undeliverable",
+          path: "/features/auth/passwordReset",
+        }),
+      ]),
+    });
+
+    input.features.auth = { emailVerification: false, passwordReset: false };
+    expect(validateSpec(input).ok).toBe(true);
+
+    input.features = { crud: {}, auth: {}, notifications: {} };
+    expect(validateSpec(input).ok).toBe(true);
   });
 
   it("validates reservation entity references and hold duration", () => {

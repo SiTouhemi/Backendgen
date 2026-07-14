@@ -1,6 +1,11 @@
-import type { FieldType, RelationType } from "@backend-compiler/specification";
+import type { FieldType, RelationOnDelete, RelationType } from "@backend-compiler/specification";
 
-export const IR_VERSION = "backendcompiler.ir/v1" as const;
+/**
+ * v2 adds an explicit referential action to every normalized relation. Keeping
+ * the version distinct prevents older serialized IR (which has no `onDelete`)
+ * from being rendered with an accidental target-specific fallback.
+ */
+export const IR_VERSION = "backendcompiler.ir/v2" as const;
 
 export type Database = "postgresql" | "mysql" | "sqlite";
 
@@ -100,6 +105,13 @@ export interface NormalizedRelation {
   foreignKey: string | null;
   /** True for one-to-one relations, which constrain the foreign key to be unique. */
   unique: boolean;
+  /**
+   * Referential action on the owning side when the related row is deleted.
+   * `restrict` refuses the delete while dependents exist, `setNull` detaches
+   * optional dependents, `cascade` removes them. Both relation sides carry the
+   * same normalized value, but targets emit it only on the owning side.
+   */
+  onDelete: RelationOnDelete;
 }
 
 export interface NormalizedIndex {

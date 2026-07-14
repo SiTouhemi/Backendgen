@@ -198,7 +198,12 @@
           "$ref": "#/$defs/identifier"
         },
         "required": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Whether the owning foreign key is non-null. Valid only for belongsTo and hasOne; collection relations must omit it."
+        },
+        "onDelete": {
+          "enum": ["restrict", "cascade", "setNull"],
+          "description": "Referential action for the owning foreign key. On hasMany this applies to the derived target foreign key. Unsupported on manyToMany; model the join entity explicitly."
         }
       }
     },

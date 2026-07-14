@@ -134,6 +134,31 @@ function validateEntitySemantics(
         message: `Relation target '${relation.target}' does not exist`,
       });
     }
+
+    const isCollection = relation.type === "hasMany" || relation.type === "manyToMany";
+    if (isCollection && relation.required !== undefined) {
+      issues.push({
+        code: "semantic.collection-relation-required-unsupported",
+        path: `/entities/${name}/relations/${relation.name}/required`,
+        message: `${relation.type} is a collection relation; required only applies to belongsTo and hasOne relations that own a foreign key`,
+      });
+    } else if (relation.onDelete === "setNull" && relation.required === true) {
+      issues.push({
+        code: "semantic.set-null-requires-optional-relation",
+        path: `/entities/${name}/relations/${relation.name}/onDelete`,
+        message:
+          "onDelete: setNull needs an optional relation; a required foreign key cannot be set to null. Use restrict or cascade, or make the relation optional.",
+      });
+    }
+
+    if (relation.type === "manyToMany" && relation.onDelete !== undefined) {
+      issues.push({
+        code: "semantic.many-to-many-on-delete-unsupported",
+        path: `/entities/${name}/relations/${relation.name}/onDelete`,
+        message:
+          "manyToMany has no owning foreign key in this IR; model the join table explicitly to control its referential actions",
+      });
+    }
   }
 
   for (const [indexPosition, index] of (entity.indexes ?? []).entries()) {
@@ -151,13 +176,43 @@ function validateEntitySemantics(
   return issues;
 }
 
-function validateFeatureSemantics(spec: BackendSpec): ValidationIssue[] {
-  const reservations = spec.features.reservations;
-  if (!reservations) {
+function validateAuthDeliverySemantics(spec: BackendSpec): ValidationIssue[] {
+  const auth = spec.features.auth;
+  if (!auth || spec.features.notifications !== undefined) {
     return [];
   }
 
+  // Both flows default to true in the auth feature schema, so "not explicitly
+  // disabled" means enabled.
   const issues: ValidationIssue[] = [];
+  const flows: Array<[flag: string, what: string]> = [
+    ["emailVerification", "email verification tokens"],
+    ["passwordReset", "password reset tokens"],
+  ];
+
+  for (const [flag, what] of flows) {
+    if (auth[flag] !== false) {
+      issues.push({
+        code: "semantic.auth-recovery-undeliverable",
+        path: `/features/auth/${flag}`,
+        message:
+          `auth.${flag} issues ${what}, but no delivery path exists without the ` +
+          "notifications feature. Enable notifications with a delivering resend/custom " +
+          `provider, or set ${flag}: false explicitly.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+function validateFeatureSemantics(spec: BackendSpec): ValidationIssue[] {
+  const issues: ValidationIssue[] = [...validateAuthDeliverySemantics(spec)];
+
+  const reservations = spec.features.reservations;
+  if (!reservations) {
+    return issues;
+  }
   for (const key of ["resource", "owner"] as const) {
     const value = reservations[key];
     if (typeof value !== "string" || !(value in spec.entities)) {

@@ -10,6 +10,7 @@ export type {
   IndexDefinition,
   ProjectOptions,
   RelationDefinition,
+  RelationOnDelete,
   RelationType,
   ValidationIssue,
   ValidationResult,

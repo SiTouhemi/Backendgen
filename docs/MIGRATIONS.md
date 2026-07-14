@@ -58,6 +58,27 @@ Do **not** deploy the rewritten `_init` migration. Create an incremental migrati
 
 The incremental migration file is yours, not the compiler's: it is untracked by the manifest and future regenerations will not touch it. Only the `_init` migration and `schema.prisma` are compiler-owned.
 
+## Upgrading a database created by an earlier 0.2 alpha
+
+This hardening release changes database semantics, not only generated TypeScript. Regenerating is sufficient for a brand-new database. An existing database needs a reviewed incremental migration; leaving the old schema in place can preserve unsafe cascades or globally scoped idempotency even though the new Prisma schema looks correct.
+
+Review the diff for all of the following:
+
+1. **Timezone-aware timestamps.** Generated datetime columns, including `createdAt`, `updatedAt`, soft-delete markers, recovery/session expiry, reservations, and outbox leases, now use `TIMESTAMPTZ(3)`. PostgreSQL must be told what timezone legacy `TIMESTAMP` values represented. If they were UTC, use the equivalent of:
+   ```sql
+   ALTER TABLE "Example"
+     ALTER COLUMN "createdAt" TYPE TIMESTAMPTZ(3)
+     USING "createdAt" AT TIME ZONE 'UTC';
+   ```
+   Substitute the actual historical timezone if the old application wrote local wall-clock values. Guessing here shifts stored instants.
+2. **Foreign-key actions.** Earlier output cascaded every required relation. Required relations now default to `RESTRICT`; only auth tokens/sessions and organization memberships explicitly cascade. Drop and recreate affected foreign keys with the action shown in the regenerated Prisma schema/migration. This must be done before relying on parent-delete conflict handling.
+3. **Reservation idempotency.** Drop the old global unique index on `idempotencyKey`, add nullable `requestFingerprint`, and create the new unique index on `(ownerId, idempotencyKey)` or `(organizationId, ownerId, idempotencyKey)`. Existing rows have no trustworthy fingerprint; replaying one of their non-null keys intentionally returns 409. Keep them for audit/history or expire them according to application policy—do not invent fingerprints from incomplete data.
+4. **Reservation overlap range.** Drop the old exclusion constraint before timestamp conversion and recreate it with `tstzrange("startsAt", "endsAt", '[)')`. Verify `btree_gist` remains installed.
+5. **New access-path indexes.** Apply the generated foreign-key indexes and tenant ordering index `(organizationId, createdAt, id)`. On large production tables, plan lock time and consider an operator-authored `CREATE INDEX CONCURRENTLY` rollout rather than copying the initial migration verbatim.
+6. **Notification outbox.** Enabling durable notification events adds `NotificationOutbox`. Deploy its table/index before starting application instances that enqueue or dispatch notifications.
+
+Take a backup, run the incremental SQL against a production-sized clone, compare constraints with `prisma validate` plus database catalog queries, and only then deploy. The compiler cannot infer the timezone of old values or the retention policy for legacy idempotency keys.
+
 ## Feature-owned constraints
 
 Some feature packs emit SQL that Prisma's schema language cannot express — the reservations overlap exclusion constraint (`btree_gist`) lives in the init migration. If your incremental diff touches the reserved resource or interval columns, re-check that the constraint survives; `prisma migrate diff` does not know about it.

@@ -46,6 +46,7 @@ entities:
         type: belongsTo                       # belongsTo | hasOne | hasMany | manyToMany
         target: Hotel                         # must reference a declared entity
         required: true                        # optional, default false
+        onDelete: restrict                    # restrict | cascade | setNull
     indexes:
       - fields: [number, hotelId]             # field names, or relation foreign keys
         unique: true                          # optional, default false
@@ -80,6 +81,8 @@ entities:
 
 Declare one side only; the compiler derives the inverse (Prisma needs both). `belongsTo` and `hasOne` own the foreign key. The foreign key column is named `<relationName>Id` — `hotel` produces `hotelId` — and indexes may reference it.
 
+`onDelete` is optional. Required owning relations default to `restrict`; optional owning relations default to `setNull`. `cascade` must be explicit. On a declared `hasMany`, the action applies to the derived foreign key on the target entity. `setNull` is invalid for a required owner, and `manyToMany` does not accept `onDelete`; model the join entity explicitly when its lifecycle matters. PostgreSQL identifiers for generated keys/indexes/constraints are deterministically shortened to the 63-byte limit.
+
 ## Features
 
 `features` maps feature names to configuration objects. `{}` accepts all defaults. Each feature's options are validated against its own JSON Schema — run `backendgen describe-feature <name>` for the live contract, or see [FEATURE_PACKS.md](FEATURE_PACKS.md).
@@ -89,9 +92,12 @@ Feature packs may create entities (`reservations` owns `Reservation`; `auth` own
 ## Semantic rules the schema cannot express
 
 - Relation targets and feature entity references must exist (`semantic.unknown-relation-target`, `feature.missing-entity`).
+- `required` applies only to owning to-one relations; `setNull` requires an optional owner, and `manyToMany` cannot define `onDelete` (`semantic.collection-relation-required-unsupported`, `semantic.set-null-requires-optional-relation`, `semantic.many-to-many-on-delete-unsupported`).
 - Index fields must be declared fields or relation foreign keys (`semantic.unknown-index-field`).
 - `minLength <= maxLength`, `minimum <= maximum` (`semantic.invalid-length-range`, `semantic.invalid-number-range`).
 - Ownership scoping requires `auth` (`feature.crud.ownership-requires-auth`).
+- CRUD `ownedBy` and reservation `owner` must currently equal `auth.userEntity` (`feature.crud.unsupported-owner-entity`, `feature.reservations.unsupported-owner-entity`).
+- Enabled auth recovery requires notifications with a delivering provider; the metadata-only log provider is rejected (`semantic.auth-recovery-undeliverable`, `feature.notifications.recovery-provider-nondelivering`).
 - Overlap prevention requires PostgreSQL (`feature.reservations.overlap-unsupported`).
 - The target must support the selected database (`target.unsupported-database`).
 

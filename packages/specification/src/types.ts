@@ -28,11 +28,24 @@ export type FieldDefinition = FieldType | FieldOptions;
 
 export type RelationType = "belongsTo" | "hasOne" | "hasMany" | "manyToMany";
 
+export type RelationOnDelete = "restrict" | "cascade" | "setNull";
+
 export interface RelationDefinition {
   name: string;
   type: RelationType;
   target: string;
+  /**
+   * Whether the owning foreign key is non-null. Applies only to `belongsTo`
+   * and `hasOne`; collection relations must omit it.
+   */
   required?: boolean;
+  /**
+   * Referential action for the owning foreign key. For `belongsTo`/`hasOne`,
+   * deleting the target applies the action to this row. For `hasMany`, deleting
+   * this row applies it to the derived foreign key on the target rows.
+   * `manyToMany` must model a join entity explicitly to control deletion.
+   */
+  onDelete?: RelationOnDelete;
 }
 
 export interface IndexDefinition {

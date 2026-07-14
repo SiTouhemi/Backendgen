@@ -1,5 +1,25 @@
-import type { BackendIR, NormalizedEntity, NormalizedField } from "@backend-compiler/compiler";
-import { enumFields, names } from "./naming.js";
+import type {
+  BackendIR,
+  NormalizedEntity,
+  NormalizedField,
+  NormalizedRelation,
+} from "@backend-compiler/compiler";
+import { databaseNames, enumFields, names, standaloneIndexes } from "./naming.js";
+
+/** IR referential actions to Prisma's. Cascade only appears when a feature or the spec asked for it. */
+const ON_DELETE_TO_PRISMA: Readonly<Record<NormalizedRelation["onDelete"], string>> = {
+  restrict: "Restrict",
+  cascade: "Cascade",
+  setNull: "SetNull",
+};
+
+function prismaOnDelete(action: NormalizedRelation["onDelete"]): string {
+  const rendered = ON_DELETE_TO_PRISMA[action];
+  if (rendered === undefined) {
+    throw new Error(`Unsupported or missing IR referential action: ${String(action)}`);
+  }
+  return rendered;
+}
 
 const SCALAR_TO_PRISMA: Readonly<Record<string, string>> = {
   string: "String",
@@ -33,8 +53,13 @@ function fieldLine(entity: NormalizedEntity, field: NormalizedField): string {
   if (field.type === "date") {
     attributes.push("@db.Date");
   }
+  if (field.type === "datetime") {
+    // Timezone-aware storage: PostgreSQL normalises to UTC on write instead of
+    // silently trusting the session time zone.
+    attributes.push("@db.Timestamptz(3)");
+  }
   if (field.unique) {
-    attributes.push("@unique");
+    attributes.push(`@unique(map: "${databaseNames.index(entity.name, [field.name], true)}")`);
   }
   if (field.defaultValue !== null) {
     attributes.push(`@default(${literal(field.defaultValue, field.enumValues !== null)})`);
@@ -52,12 +77,17 @@ function relationLines(entity: NormalizedEntity): string[] {
     if (relation.owner && relation.foreignKey) {
       // to-one owning side: a scalar foreign key plus the relation field.
       const optional = relation.required ? "" : "?";
-      const onDelete = relation.required ? "Cascade" : "SetNull";
+      const onDelete = prismaOnDelete(relation.onDelete);
+      const foreignKeyName = databaseNames.foreignKey(entity.name, relation.foreignKey);
       lines.push(
-        `  ${relation.foreignKey} String${optional}${relation.unique ? " @unique" : ""}`,
+        `  ${relation.foreignKey} String${optional}${
+          relation.unique
+            ? ` @unique(map: "${databaseNames.index(entity.name, [relation.foreignKey], true)}")`
+            : ""
+        }`,
       );
       lines.push(
-        `  ${relation.name} ${model}${optional} @relation("${relation.relationName}", fields: [${relation.foreignKey}], references: [id], onDelete: ${onDelete})`,
+        `  ${relation.name} ${model}${optional} @relation("${relation.relationName}", fields: [${relation.foreignKey}], references: [id], onDelete: ${onDelete}, map: "${foreignKeyName}")`,
       );
       continue;
     }
@@ -77,13 +107,13 @@ function relationLines(entity: NormalizedEntity): string[] {
 function modelBlock(entity: NormalizedEntity): string {
   const lines: string[] = [
     `model ${names.model(entity.name)} {`,
-    "  id String @id @default(uuid())",
-    "  createdAt DateTime @default(now())",
-    "  updatedAt DateTime @updatedAt",
+    `  id String @id(map: "${databaseNames.primaryKey(entity.name)}") @default(uuid())`,
+    "  createdAt DateTime @default(now()) @db.Timestamptz(3)",
+    "  updatedAt DateTime @updatedAt @db.Timestamptz(3)",
   ];
 
   if (entity.softDelete) {
-    lines.push("  deletedAt DateTime?");
+    lines.push("  deletedAt DateTime? @db.Timestamptz(3)");
   }
 
   for (const field of entity.fields) {
@@ -92,13 +122,10 @@ function modelBlock(entity: NormalizedEntity): string {
 
   lines.push(...relationLines(entity));
 
-  for (const index of entity.indexes) {
+  for (const index of standaloneIndexes(entity)) {
     const attribute = index.unique ? "@@unique" : "@@index";
-    lines.push(`  ${attribute}([${index.fields.join(", ")}])`);
-  }
-
-  if (entity.softDelete) {
-    lines.push("  @@index([deletedAt])");
+    const map = databaseNames.index(entity.name, index.fields, index.unique);
+    lines.push(`  ${attribute}([${index.fields.join(", ")}], map: "${map}")`);
   }
 
   lines.push("}");

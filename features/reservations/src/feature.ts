@@ -113,6 +113,17 @@ export const reservationsFeature: FeaturePack = {
       });
     }
 
+    const auth = context.featureConfig("auth") as { userEntity?: string } | undefined;
+    const authUserEntity = auth?.userEntity ?? "User";
+    if (config.owner !== authUserEntity) {
+      issues.push({
+        code: "feature.reservations.unsupported-owner-entity",
+        path: "/features/reservations/owner",
+        message:
+          `Reservation ownership is derived from the authenticated user id, so owner must equal auth.userEntity '${authUserEntity}', not '${config.owner}'. Custom owner mapping is not supported yet.`,
+      });
+    }
+
     if (config.preventOverlap && context.target.database !== "postgresql") {
       issues.push({
         code: "feature.reservations.overlap-unsupported",
@@ -183,16 +194,32 @@ export const reservationsFeature: FeaturePack = {
           name: "idempotencyKey",
           type: "string",
           required: false,
-          unique: true,
           internal: true,
-          description: "Value of the Idempotency-Key request header, if one was supplied.",
+          description:
+            "Value of the Idempotency-Key request header, if one was supplied. Unique per owner (and tenant), never globally.",
+        },
+        {
+          name: "requestFingerprint",
+          type: "string",
+          required: false,
+          internal: true,
+          description:
+            "Digest of the request an idempotency key was first used with. Replaying the key with a different request is a conflict, not a silent replay.",
         },
       ],
       relations,
       indexes: [
         { fields: ["resourceId", "startsAt", "endsAt"], unique: false },
-        { fields: ["status"], unique: false },
-        { fields: ["holdExpiresAt"], unique: false },
+        // Matches the hold-expiry sweep: WHERE status = 'HELD' AND holdExpiresAt <= now.
+        { fields: ["status", "holdExpiresAt"], unique: false },
+        // Idempotency keys are scoped to the principal (and tenant) so two
+        // clients can never collide on, or replay, each other's keys.
+        {
+          fields: tenantAware
+            ? ["organizationId", "ownerId", "idempotencyKey"]
+            : ["ownerId", "idempotencyKey"],
+          unique: true,
+        },
       ],
       ownership: { relation: "owner", foreignKey: "ownerId", entity: config.owner },
     };
@@ -261,17 +288,21 @@ export const reservationsFeature: FeaturePack = {
           auth: "authenticated",
           roles: [],
         },
-        {
-          id: `${entity}.confirm`,
-          feature: "reservations",
-          method: "POST",
-          path: "/reservations/:id/confirm",
-          entity,
-          operation: "confirm",
-          summary: "Confirm a held reservation",
-          auth: "authenticated",
-          roles: [],
-        },
+        ...(holds
+          ? [
+              {
+                id: `${entity}.confirm`,
+                feature: "reservations" as const,
+                method: "POST" as const,
+                path: "/reservations/:id/confirm",
+                entity,
+                operation: "confirm",
+                summary: "Confirm a held reservation",
+                auth: "authenticated" as const,
+                roles: [],
+              },
+            ]
+          : []),
         {
           id: `${entity}.cancel`,
           feature: "reservations",
@@ -289,17 +320,20 @@ export const reservationsFeature: FeaturePack = {
         {
           name: "reservation-lifecycle",
           feature: "reservations",
-          description:
-            "A reservation is created HELD, becomes CONFIRMED, and ends CANCELLED or EXPIRED. No transition out of a terminal state is permitted.",
-          states: [...RESERVATION_STATUSES],
+          description: holds
+            ? "A reservation is created HELD, becomes CONFIRMED, and ends CANCELLED or EXPIRED. No transition out of a terminal state is permitted."
+            : "A reservation is created CONFIRMED and can become CANCELLED. No transition out of the terminal state is permitted.",
+          states: holds ? [...RESERVATION_STATUSES] : ["CONFIRMED", "CANCELLED"],
           initialState: holds ? "HELD" : "CONFIRMED",
-          terminalStates: ["CANCELLED", "EXPIRED"],
-          transitions: [
-            { from: "HELD", to: "CONFIRMED", trigger: "confirm" },
-            { from: "HELD", to: "CANCELLED", trigger: "cancel" },
-            { from: "HELD", to: "EXPIRED", trigger: "hold-expiry" },
-            { from: "CONFIRMED", to: "CANCELLED", trigger: "cancel" },
-          ],
+          terminalStates: holds ? ["CANCELLED", "EXPIRED"] : ["CANCELLED"],
+          transitions: holds
+            ? [
+                { from: "HELD", to: "CONFIRMED", trigger: "confirm" },
+                { from: "HELD", to: "CANCELLED", trigger: "cancel" },
+                { from: "HELD", to: "EXPIRED", trigger: "hold-expiry" },
+                { from: "CONFIRMED", to: "CANCELLED", trigger: "cancel" },
+              ]
+            : [{ from: "CONFIRMED", to: "CANCELLED", trigger: "cancel" }],
         },
       ],
 
@@ -313,7 +347,9 @@ export const reservationsFeature: FeaturePack = {
         {
           name: "reservation.confirmed",
           feature: "reservations",
-          description: "A held reservation was confirmed.",
+          description: holds
+            ? "A held reservation was confirmed."
+            : "A reservation was confirmed immediately when it was created.",
           payload: {
             reservationId: "uuid",
             resourceId: "uuid",
@@ -328,12 +364,20 @@ export const reservationsFeature: FeaturePack = {
           description: "A reservation was cancelled.",
           payload: { reservationId: "uuid", resourceId: "uuid", ownerId: "uuid" },
         },
-        {
-          name: "reservation.expired",
-          feature: "reservations",
-          description: "A hold expired without being confirmed.",
-          payload: { reservationId: "uuid", resourceId: "uuid", ownerId: "uuid" },
-        },
+        ...(holds
+          ? [
+              {
+                name: "reservation.expired",
+                feature: "reservations",
+                description: "A hold expired without being confirmed.",
+                payload: {
+                  reservationId: "uuid" as const,
+                  resourceId: "uuid" as const,
+                  ownerId: "uuid" as const,
+                },
+              },
+            ]
+          : []),
       ],
 
       infrastructure: [

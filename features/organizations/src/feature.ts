@@ -142,8 +142,21 @@ export const organizationsFeature: FeaturePack = {
           },
         ],
         relations: [
-          { name: "organization", type: "belongsTo", target: "Organization", required: true },
-          { name: "user", type: "belongsTo", target: config.userEntity, required: true },
+          // A membership is a pure join row; it disappears with either side.
+          {
+            name: "organization",
+            type: "belongsTo",
+            target: "Organization",
+            required: true,
+            onDelete: "cascade",
+          },
+          {
+            name: "user",
+            type: "belongsTo",
+            target: config.userEntity,
+            required: true,
+            onDelete: "cascade",
+          },
         ],
         indexes: [{ fields: ["organizationId", "userId"], unique: true }],
       },

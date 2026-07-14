@@ -1,5 +1,5 @@
 import type { NormalizedEntity } from "@backend-compiler/compiler";
-import { names } from "@backend-compiler/target-nestjs-prisma";
+import { names, postgresIdentifier } from "@backend-compiler/target-nestjs-prisma";
 import {
   emptyRenderResult,
   type FeatureTargetRenderer,
@@ -18,7 +18,12 @@ function scaffold(path: string, contents: string): RenderedFile {
 }
 
 function constraintName(entity: string): string {
-  return `${entity}_no_overlap`;
+  return postgresIdentifier(`${entity}_no_overlap`);
+}
+
+function hasNotificationEvent(context: TargetRenderContext, event: string): boolean {
+  const events = context.featureConfig("notifications")?.events;
+  return Array.isArray(events) && events.includes(event);
 }
 
 /**
@@ -41,7 +46,7 @@ ALTER TABLE "${config.entity}"
   ADD CONSTRAINT "${constraintName(config.entity)}"
   EXCLUDE USING gist (
     "resourceId" WITH =,
-    tsrange("startsAt", "endsAt", '[)') WITH &&
+    tstzrange("startsAt", "endsAt", '[)') WITH &&
   )
   WHERE (status IN ('HELD', 'CONFIRMED'));`,
   ];
@@ -101,7 +106,7 @@ export class DefaultReservationPolicy implements ReservationPolicy {
 `;
 }
 
-const CUSTOM_POLICY_SCAFFOLD = `import { Injectable } from '@nestjs/common';
+const CUSTOM_POLICY_SCAFFOLD = `import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   ReservationPolicy,
   ReservationRequest,
@@ -127,7 +132,7 @@ export class CustomReservationPolicy implements ReservationPolicy {
   validateRequest(request: ReservationRequest): void {
     // Example: refuse reservations that start in the past.
     if (request.startsAt.getTime() < Date.now()) {
-      throw new Error('A reservation cannot start in the past');
+      throw new BadRequestException('A reservation cannot start in the past');
     }
   }
 
@@ -238,6 +243,7 @@ function serviceFile(
   config: ReservationsConfig,
   reservation: NormalizedEntity,
   resource: NormalizedEntity,
+  context: TargetRenderContext,
 ): string {
   const model = names.model(config.entity);
   const delegate = names.delegate(config.entity);
@@ -246,17 +252,37 @@ function serviceFile(
   const statusEnum = names.enumType(config.entity, "status");
   const holds = holdsEnabled(config);
   const tenant = reservation.tenant !== null;
+  const notifyCreated = hasNotificationEvent(context, "reservation_created");
+  const notifyConfirmed = hasNotificationEvent(context, "reservation_confirmed");
+  const notifyCancelled = hasNotificationEvent(context, "reservation_cancelled");
+  const notifyExpired = hasNotificationEvent(context, "reservation_expired");
+  const usesOutbox = notifyCreated || notifyConfirmed || notifyCancelled || notifyExpired;
+  const crud = context.featureConfig("crud") as { adminRoles?: unknown } | undefined;
+  const auth = context.featureConfig("auth") as
+    | { roles?: string[]; defaultRole?: string }
+    | undefined;
+  const accountRoles = auth?.roles ?? ["admin", "user"];
+  const registrationRole = auth?.defaultRole ?? accountRoles.at(-1) ?? "user";
+  const adminRoles = Array.isArray(crud?.adminRoles)
+    ? crud.adminRoles.filter((role): role is string => typeof role === "string")
+    : accountRoles.filter((role) => role !== registrationRole).slice(0, 1);
 
   const scopeImports = ["RequestScope", "isAdmin", "requireUser"];
   if (tenant) scopeImports.push("requireOrganization");
 
   const resourceFilters = [
-    `id: dto.resourceId,`,
+    "id: resourceId,",
     ...(resource.softDelete ? ["deletedAt: null,"] : []),
     ...(resource.tenant !== null ? [`${resource.tenant.foreignKey}: organizationId,`] : []),
+    ...(resource.ownership !== null
+      ? [
+          `...(isAdmin(scope, ADMIN_ROLES) ? {} : { ${resource.ownership.foreignKey}: ownerId }),`,
+        ]
+      : []),
   ];
 
-  return `import {
+  return `import { createHash } from 'node:crypto';
+import {
   BadRequestException,
   ConflictException,
   Inject,
@@ -268,7 +294,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ${statusEnum} } from '@prisma/client';
 import { Page, toPage } from '../common/pagination';
 import { ${scopeImports.sort().join(", ")} } from '../common/scope';
-import { PrismaService } from '../prisma/prisma.service';
+${usesOutbox ? "import { enqueueNotification } from '../notifications/outbox';\n" : ""}import { PrismaService } from '../prisma/prisma.service';
 import {
   Availability${model}QueryDto,
   AvailabilityDto,
@@ -279,9 +305,8 @@ import {
 } from './dto/reservation.dto';
 import { RESERVATION_POLICY, ReservationPolicy } from './reservation-policy';
 
-const ADMIN_ROLES = ['admin'];
-const HOLD_MINUTES = ${config.holdMinutes};
-const MIN_DURATION_MS = ${config.minDurationMinutes} * 60_000;
+const ADMIN_ROLES = ${JSON.stringify(adminRoles)};
+${holds ? `const HOLD_MINUTES = ${config.holdMinutes};\n` : ""}const MIN_DURATION_MS = ${config.minDurationMinutes} * 60_000;
 const MAX_DURATION_MS = ${config.maxDurationMinutes} * 60_000;
 const OVERLAP_CONSTRAINT = '${constraintName(config.entity)}';
 
@@ -301,6 +326,22 @@ function isOverlapViolation(error: unknown): boolean {
 
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+/**
+ * Canonical digest of the semantic reservation request. Scope and owner are
+ * enforced separately by the unique key, so only request fields belong here.
+ */
+function fingerprintRequest(resourceId: string, startsAt: Date, endsAt: Date): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        resourceId,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+      }),
+    )
+    .digest('hex');
 }
 
 /**
@@ -331,26 +372,31 @@ export class ${model}Service {
       );
     }
 
+    const resourceId = dto.resourceId;
     const startsAt = new Date(dto.startsAt);
     const endsAt = new Date(dto.endsAt);
     this.assertValidInterval(startsAt, endsAt);
 
-    await this.policy.validateRequest({ resourceId: dto.resourceId, ownerId, startsAt, endsAt });
+    const requestFingerprint = fingerprintRequest(resourceId, startsAt, endsAt);
+    const idempotencyWhere: Prisma.${model}WhereInput = {
+      ownerId,${tenant ? "\n      organizationId," : ""}
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+    };
 
     if (idempotencyKey !== undefined) {
       const replayed = await this.prisma.${delegate}.findFirst({
-        where: this.scopedWhere({ idempotencyKey }, scope),
+        where: idempotencyWhere,
       });
 
       if (replayed !== null) {
+        if (replayed.requestFingerprint !== requestFingerprint) {
+          throw new ConflictException(
+            'That idempotency key was already used for a different reservation request',
+          );
+        }
         return to${model}(replayed);
       }
     }
-
-    // Release holds that have timed out, so their intervals stop blocking this
-    // request. The scheduled job does the same thing; doing it here as well
-    // means a request never has to wait for the next tick.
-    await this.expireHolds(dto.resourceId);
 
     const resource = await this.prisma.${resourceDelegate}.findFirst({
       where: {
@@ -363,13 +409,23 @@ export class ${model}Service {
       throw new NotFoundException('${resourceModel} not found');
     }
 
+    // Resource ownership is established before either custom policy execution
+    // or hold cleanup, preventing a caller from affecting another tenant by
+    // submitting a foreign resource id.
+    await this.policy.validateRequest({ resourceId, ownerId, startsAt, endsAt });
+
+    // Release holds that have timed out, so their intervals stop blocking this
+    // request. The scheduled job does the same thing; doing it here as well
+    // means a request never has to wait for the next tick.
+    await this.expireHolds(resourceId);
+
     const status = ${holds ? "'HELD'" : "'CONFIRMED'"} as const;
 
     try {
       const created = await this.prisma.$transaction(async (tx) => {
-        return tx.${delegate}.create({
+        const reservation = await tx.${delegate}.create({
           data: {
-            resourceId: dto.resourceId,
+            resourceId,
             ownerId,${tenant ? "\n            organizationId," : ""}
             startsAt,
             endsAt,
@@ -378,9 +434,32 @@ export class ${model}Service {
                 ? "\n            holdExpiresAt: new Date(Date.now() + HOLD_MINUTES * 60_000),"
                 : "\n            confirmedAt: new Date(),"
             }
-            ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+            ...(idempotencyKey !== undefined
+              ? { idempotencyKey, requestFingerprint }
+              : {}),
           },
         });
+
+${
+  notifyCreated
+    ? `        await enqueueNotification(tx, 'reservation.created', {
+          reservationId: reservation.id,
+          resourceId: reservation.resourceId,
+          ownerId: reservation.ownerId,
+          status: reservation.status,
+        });
+`
+    : ""
+}${
+  !holds && notifyConfirmed
+    ? `        await enqueueNotification(tx, 'reservation.confirmed', {
+          reservationId: reservation.id,
+          resourceId: reservation.resourceId,
+          ownerId: reservation.ownerId,
+        });
+`
+    : ""
+}        return reservation;
       });
 
       this.events.emit('reservation.created', {
@@ -412,10 +491,15 @@ ${
       // returns what the winner created rather than an error.
       if (isUniqueViolation(error) && idempotencyKey !== undefined) {
         const existing = await this.prisma.${delegate}.findFirst({
-          where: this.scopedWhere({ idempotencyKey }, scope),
+          where: idempotencyWhere,
         });
 
         if (existing !== null) {
+          if (existing.requestFingerprint !== requestFingerprint) {
+            throw new ConflictException(
+              'That idempotency key was already used for a different reservation request',
+            );
+          }
           return to${model}(existing);
         }
 
@@ -427,17 +511,30 @@ ${
   }
 
   async availability(
-    query: Availability${model}QueryDto,${tenant ? "\n    scope: RequestScope," : ""}
-  ): Promise<AvailabilityDto> {${tenant ? "\n    const organizationId = requireOrganization(scope);" : ""}
+    query: Availability${model}QueryDto,
+    scope: RequestScope,
+  ): Promise<AvailabilityDto> {${tenant ? "\n    const organizationId = requireOrganization(scope);" : ""}${resource.ownership !== null ? "\n    const ownerId = requireUser(scope);" : tenant ? "" : "\n    void scope;"}
+    const resourceId = query.resourceId;
     const startsAt = new Date(query.startsAt);
     const endsAt = new Date(query.endsAt);
     this.assertValidInterval(startsAt, endsAt);
 
-    await this.expireHolds(query.resourceId);
+    const resource = await this.prisma.${resourceDelegate}.findFirst({
+      where: {
+        ${resourceFilters.join("\n        ")}
+      },
+      select: { id: true },
+    });
+
+    if (resource === null) {
+      throw new NotFoundException('${resourceModel} not found');
+    }
+
+    await this.expireHolds(resourceId);
 
     const conflicts = await this.prisma.${delegate}.count({
       where: {
-        resourceId: query.resourceId,${tenant ? "\n        organizationId," : ""}
+        resourceId,${tenant ? "\n        organizationId," : ""}
         status: { in: ACTIVE_STATUSES },
         // Half-open intervals: [a, b) and [b, c) do not overlap.
         startsAt: { lt: endsAt },
@@ -463,7 +560,7 @@ ${
       this.prisma.${delegate}.count({ where }),
       this.prisma.${delegate}.findMany({
         where,
-        orderBy: { startsAt: query.order },
+        orderBy: [{ startsAt: query.order }, { id: 'asc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
@@ -487,24 +584,38 @@ ${
     }
 
     if (reservation.holdExpiresAt !== null && reservation.holdExpiresAt <= now) {
-      await this.prisma.${delegate}.updateMany({
-        where: this.scopedWhere({ id, status: 'HELD', holdExpiresAt: { lte: now } }, scope),
-        data: { status: 'EXPIRED', holdExpiresAt: null },
-      });
-
+      await this.expireHolds(reservation.resourceId);
       throw new ConflictException('The hold on this reservation has expired');
     }
 
-    const [confirmed] = await this.prisma.${delegate}.updateManyAndReturn({
-      where: this.scopedWhere(
-        {
-          id,
-          status: 'HELD',
-          OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }],
-        },
-        scope,
-      ),
-      data: { status: 'CONFIRMED', confirmedAt: now, holdExpiresAt: null },
+    const confirmed = await this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.${delegate}.updateManyAndReturn({
+        where: this.scopedWhere(
+          {
+            id,
+            status: 'HELD',
+            OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }],
+          },
+          scope,
+        ),
+        data: { status: 'CONFIRMED', confirmedAt: now, holdExpiresAt: null },
+      });
+
+      if (row === undefined) {
+        return undefined;
+      }
+${
+  notifyConfirmed
+    ? `
+      await enqueueNotification(tx, 'reservation.confirmed', {
+        reservationId: row.id,
+        resourceId: row.resourceId,
+        ownerId: row.ownerId,
+      });
+`
+    : ""
+}
+      return row;
     });
 
     if (confirmed === undefined) {
@@ -535,9 +646,27 @@ ${
       throw new ConflictException('This reservation can no longer be cancelled');
     }
 
-    const [cancelled] = await this.prisma.${delegate}.updateManyAndReturn({
-      where: this.scopedWhere({ id, status: { in: ['HELD', 'CONFIRMED'] } }, scope),
-      data: { status: 'CANCELLED', cancelledAt: new Date(), holdExpiresAt: null },
+    const cancelled = await this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.${delegate}.updateManyAndReturn({
+        where: this.scopedWhere({ id, status: { in: ['HELD', 'CONFIRMED'] } }, scope),
+        data: { status: 'CANCELLED', cancelledAt: new Date(), holdExpiresAt: null },
+      });
+
+      if (row === undefined) {
+        return undefined;
+      }
+${
+  notifyCancelled
+    ? `
+      await enqueueNotification(tx, 'reservation.cancelled', {
+        reservationId: row.id,
+        resourceId: row.resourceId,
+        ownerId: row.ownerId,
+      });
+`
+    : ""
+}
+      return row;
     });
 
     if (cancelled === undefined) {
@@ -553,44 +682,76 @@ ${
     return to${model}(cancelled);
   }
 
-  /** Moves timed-out holds to EXPIRED. Idempotent, so concurrent runs are safe. */
+  /**
+   * Moves every timed-out hold to EXPIRED in bounded batches. Each update still
+   * predicates on HELD, so multiple workers can drain concurrently without
+   * emitting duplicate state transitions.
+   */
   async expireHolds(resourceId?: string): Promise<number> {
-    const now = new Date();
-    const candidates = await this.prisma.${delegate}.findMany({
-      where: {
-        status: 'HELD',
-        holdExpiresAt: { lte: now },
-        ...(resourceId !== undefined ? { resourceId } : {}),
-      },
-      select: { id: true },
-      orderBy: { holdExpiresAt: 'asc' },
-      take: 100,
-    });
+    let total = 0;
 
-    if (candidates.length === 0) {
-      return 0;
-    }
+    for (;;) {
+      const now = new Date();
+      const batch = await this.prisma.$transaction(async (tx) => {
+        const candidates = await tx.${delegate}.findMany({
+          where: {
+            status: 'HELD',
+            holdExpiresAt: { lte: now },
+            ...(resourceId !== undefined ? { resourceId } : {}),
+          },
+          select: { id: true },
+          orderBy: [{ holdExpiresAt: 'asc' }, { id: 'asc' }],
+          take: 100,
+        });
 
-    const expired = await this.prisma.${delegate}.updateManyAndReturn({
-      where: {
-        id: { in: candidates.map((row) => row.id) },
-        status: 'HELD',
-        holdExpiresAt: { lte: now },
-      },
-      data: { status: 'EXPIRED', holdExpiresAt: null },
-      select: { id: true, resourceId: true, ownerId: true },
-    });
+        if (candidates.length === 0) {
+          return { candidates: 0, rows: [] };
+        }
 
-    for (const row of expired) {
-      this.events.emit('reservation.expired', {
-        reservationId: row.id,
-        resourceId: row.resourceId,
-        ownerId: row.ownerId,
+        const rows = await tx.${delegate}.updateManyAndReturn({
+          where: {
+            id: { in: candidates.map((row) => row.id) },
+            status: 'HELD',
+            holdExpiresAt: { lte: now },
+          },
+          data: { status: 'EXPIRED', holdExpiresAt: null },
+          select: { id: true, resourceId: true, ownerId: true },
+        });
+
+${
+  notifyExpired
+    ? `        for (const row of rows) {
+          await enqueueNotification(tx, 'reservation.expired', {
+            reservationId: row.id,
+            resourceId: row.resourceId,
+            ownerId: row.ownerId,
+          });
+        }
+`
+    : ""
+}
+
+        return { candidates: candidates.length, rows };
       });
+
+      for (const row of batch.rows) {
+        this.events.emit('reservation.expired', {
+          reservationId: row.id,
+          resourceId: row.resourceId,
+          ownerId: row.ownerId,
+        });
+      }
+
+      total += batch.rows.length;
+      if (batch.candidates === 0) {
+        break;
+      }
     }
 
-    this.logger.log(\`Expired \${expired.length} hold(s)\`);
-    return expired.length;
+    if (total > 0) {
+      this.logger.log(\`Expired \${total} hold(s)\`);
+    }
+    return total;
   }
 
   private assertValidInterval(startsAt: Date, endsAt: Date): void {
@@ -651,8 +812,20 @@ ${tenant ? "\n    scoped.organizationId = requireOrganization(scope);\n" : ""}
 
 function controllerFile(config: ReservationsConfig, reservation: NormalizedEntity): string {
   const model = names.model(config.entity);
-  const tenant = reservation.tenant !== null;
-  const availabilityArgs = tenant ? "query, scope" : "query";
+  void reservation;
+  const confirmRoute = holdsEnabled(config)
+    ? `
+  @Post(':id/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiOkResponse({ type: ${model}Dto })
+  confirm(
+    @Param('id') id: string,
+    @CurrentScope() scope: RequestScope,
+  ): Promise<${model}Dto> {
+    return this.service.confirm(id, scope);
+  }
+`
+    : "";
 
   return `import {
   Body,
@@ -674,7 +847,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { ApiErrorDto } from '../common/api-error.dto';
-import { Page } from '../common/pagination';
+import { ApiPaginatedResponse, Page } from '../common/pagination';
 import { CurrentScope, RequestScope } from '../common/scope';
 import {
   Availability${model}QueryDto,
@@ -699,8 +872,7 @@ export class ${model}Controller {
     @Query() query: Availability${model}QueryDto,
     @CurrentScope() scope: RequestScope,
   ): Promise<AvailabilityDto> {
-    void scope;
-    return this.service.availability(${availabilityArgs});
+    return this.service.availability(query, scope);
   }
 
   @Post()
@@ -720,7 +892,7 @@ export class ${model}Controller {
   }
 
   @Get()
-  @ApiOkResponse({ type: [${model}Dto] })
+  @ApiPaginatedResponse(${model}Dto)
   findMany(
     @Query() query: Query${model}Dto,
     @CurrentScope() scope: RequestScope,
@@ -737,16 +909,7 @@ export class ${model}Controller {
     return this.service.findOne(id, scope);
   }
 
-  @Post(':id/confirm')
-  @HttpCode(HttpStatus.OK)
-  @ApiOkResponse({ type: ${model}Dto })
-  confirm(
-    @Param('id') id: string,
-    @CurrentScope() scope: RequestScope,
-  ): Promise<${model}Dto> {
-    return this.service.confirm(id, scope);
-  }
-
+${confirmRoute}
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: ${model}Dto })
@@ -838,7 +1001,8 @@ function serviceSpec(config: ReservationsConfig, reservation: NormalizedEntity):
   const tenant = reservation.tenant !== null;
   const scope = `{ userId: 'user-1', organizationId: 'org-1', roles: [] }`;
 
-  return `import { BadRequestException, ConflictException } from '@nestjs/common';
+  return `import { createHash } from 'node:crypto';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
@@ -847,6 +1011,18 @@ import { DefaultReservationPolicy, RESERVATION_POLICY } from './reservation-poli
 import { ${model}Service } from './reservation.service';
 
 const scope: RequestScope = ${scope};
+
+function requestFingerprint(resourceId: string, startsAt: string, endsAt: string): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        resourceId,
+        startsAt: new Date(startsAt).toISOString(),
+        endsAt: new Date(endsAt).toISOString(),
+      }),
+    )
+    .digest('hex');
+}
 
 describe('${model}Service', () => {
   const reservations = {
@@ -905,6 +1081,11 @@ describe('${model}Service', () => {
       startsAt: new Date('2025-01-01T10:00:00Z'),
       endsAt: new Date('2025-01-01T11:00:00Z'),
       status: 'HELD',
+      requestFingerprint: requestFingerprint(
+        'resource-1',
+        '2025-01-01T10:00:00Z',
+        '2025-01-01T11:00:00Z',
+      ),
       holdExpiresAt: null,
       confirmedAt: null,
       cancelledAt: null,
@@ -925,6 +1106,44 @@ describe('${model}Service', () => {
 
     expect(result.id).toBe('reservation-1');
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed request that reuses an idempotency key', async () => {
+    reservations.findFirst.mockResolvedValue({
+      id: 'reservation-1',
+      requestFingerprint: requestFingerprint(
+        'resource-1',
+        '2025-01-01T10:00:00Z',
+        '2025-01-01T11:00:00Z',
+      ),
+    });
+
+    await expect(
+      service.create(
+        {
+          resourceId: 'resource-1',
+          startsAt: '2025-01-01T10:00:00Z',
+          endsAt: '2025-01-01T12:00:00Z',
+        },
+        scope,
+        'key-1',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('returns not found when availability targets a missing resource', async () => {
+    prisma.${resourceDelegate}.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.availability(
+        {
+          resourceId: 'missing',
+          startsAt: '2025-01-01T10:00:00Z',
+          endsAt: '2025-01-01T11:00:00Z',
+        },
+        scope,
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('refuses to confirm a reservation that is not held', async () => {
@@ -1128,6 +1347,13 @@ ${
 
     expect(replay.body.id).toBe(first.body.id);
 
+    await request(app.getHttpServer())
+      .post('/${prefix}/reservations')
+      .set(headers)
+      .set('Idempotency-Key', 'retry-1')
+      .send({ ...payload, endsAt: '2030-03-01T13:00:00Z' })
+      .expect(409);
+
     const stored = await prisma.${names.delegate(config.entity)}.count({
       where: { resourceId: resource.id },
     });
@@ -1145,6 +1371,7 @@ function lifecycleE2e(config: ReservationsConfig, context: TargetRenderContext):
   const reservation = context.entity(config.entity);
   const tenant = reservation.tenant !== null;
   const holds = holdsEnabled(config);
+  const delegate = names.delegate(config.entity);
 
   const setup = tenant
     ? `
@@ -1164,6 +1391,25 @@ function lifecycleE2e(config: ReservationsConfig, context: TargetRenderContext):
     : `
     const account = await registerAccount(app, prisma);
     const resource = await create${resourceModel}(prisma);
+    const headers = { Authorization: \`Bearer \${account.accessToken}\` };
+`;
+
+  const setupWithoutResource = tenant
+    ? `
+    const account = await registerAccount(app, prisma);
+    const organization = await request(app.getHttpServer())
+      .post('/${prefix}/organizations')
+      .set('Authorization', \`Bearer \${account.accessToken}\`)
+      .send({ name: 'Lifecycle' })
+      .expect(201);
+
+    const headers = {
+      Authorization: \`Bearer \${account.accessToken}\`,
+      'X-Organization-Id': organization.body.id as string,
+    };
+`
+    : `
+    const account = await registerAccount(app, prisma);
     const headers = { Authorization: \`Bearer \${account.accessToken}\` };
 `;
 
@@ -1269,6 +1515,61 @@ ${
       .expect(400);
   });
 
+  it('returns not found instead of available for a missing resource', async () => {${setupWithoutResource}
+    await request(app.getHttpServer())
+      .get('/${prefix}/reservations/availability')
+      .query({
+        resourceId: 'missing-resource',
+        startsAt: '2030-05-01T10:00:00Z',
+        endsAt: '2030-05-01T12:00:00Z',
+      })
+      .set(headers)
+      .expect(404);
+  });
+${
+  holds
+    ? `
+  it('drains more than one batch of expired holds before reporting availability', async () => {${setup}
+    const expiredAt = new Date('2020-01-01T00:00:00Z');
+    await prisma.${delegate}.createMany({
+      data: Array.from({ length: 105 }, (_, index) => {
+        const startsAt = new Date(Date.UTC(2020, 0, 2, 0, index * 60));
+        return {
+          resourceId: resource.id,
+          ownerId: account.id,${tenant ? "\n          organizationId: organization.body.id as string," : ""}
+          startsAt,
+          endsAt: new Date(startsAt.getTime() + 30 * 60_000),
+          status: 'HELD' as never,
+          holdExpiresAt: expiredAt,
+        };
+      }),
+    });
+
+    await request(app.getHttpServer())
+      .get('/${prefix}/reservations/availability')
+      .query({
+        resourceId: resource.id,
+        startsAt: '2031-01-01T10:00:00Z',
+        endsAt: '2031-01-01T12:00:00Z',
+      })
+      .set(headers)
+      .expect(200, { available: true, conflicts: 0 });
+
+    expect(
+      await prisma.${delegate}.count({
+        where: { resourceId: resource.id, status: 'HELD' },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.${delegate}.count({
+        where: { resourceId: resource.id, status: 'EXPIRED' },
+      }),
+    ).toBe(105);
+  });
+`
+    : ""
+}
+
   it('never shows one account the reservations of another', async () => {${setup}
     await request(app.getHttpServer())
       .post('/${prefix}/reservations')
@@ -1320,7 +1621,10 @@ export const reservationsRenderer: FeatureTargetRenderer = {
     const files: RenderedFile[] = [
       file("src/generated/reservations/reservation-policy.ts", policyFile(config)),
       file("src/generated/reservations/dto/reservation.dto.ts", dtoFile(config, reservation)),
-      file("src/generated/reservations/reservation.service.ts", serviceFile(config, reservation, resource)),
+      file(
+        "src/generated/reservations/reservation.service.ts",
+        serviceFile(config, reservation, resource, context),
+      ),
       file("src/generated/reservations/reservation.controller.ts", controllerFile(config, reservation)),
       file("src/generated/reservations/reservation.module.ts", moduleFile(config)),
       file("src/generated/reservations/reservation.service.spec.ts", serviceSpec(config, reservation)),

@@ -16,7 +16,9 @@ interface CrudConfig {
   entities?: string[];
   softDelete: string[];
   ownedBy: Record<string, string>;
-  adminRoles: string[];
+  adminRoles?: string[];
+  destructiveRoles?: string[];
+  destructiveOrgRoles?: string[];
   defaultPageSize: number;
   maxPageSize: number;
 }
@@ -71,9 +73,27 @@ export const crudFeature: FeaturePack = {
       },
       adminRoles: {
         type: "array",
-        items: { type: "string" },
-        default: ["admin"],
-        description: "Roles that bypass ownership scoping.",
+        items: { type: "string", pattern: "^[a-z][a-z0-9_]*$" },
+        minItems: 1,
+        uniqueItems: true,
+        description:
+          "Roles that bypass ownership scoping. Defaults to the first declared auth role that is not the self-registration role.",
+      },
+      destructiveRoles: {
+        type: "array",
+        items: { type: "string", pattern: "^[a-z][a-z0-9_]*$" },
+        minItems: 1,
+        uniqueItems: true,
+        description:
+          "Account roles allowed to delete entities that have no row ownership. Defaults to adminRoles.",
+      },
+      destructiveOrgRoles: {
+        type: "array",
+        items: { type: "string", pattern: "^[a-z][a-z0-9_]*$" },
+        minItems: 1,
+        uniqueItems: true,
+        description:
+          "Organization roles allowed to delete tenant-scoped entities. Defaults to every organization role except the least privileged.",
       },
       defaultPageSize: { type: "integer", minimum: 1, maximum: 200, default: 20 },
       maxPageSize: { type: "integer", minimum: 1, maximum: 500, default: 100 },
@@ -103,6 +123,97 @@ export const crudFeature: FeaturePack = {
         path: "/features/crud/defaultPageSize",
         message: "defaultPageSize cannot be greater than maxPageSize",
       });
+    }
+
+    const auth = context.featureConfig("auth") as { roles?: string[] } | undefined;
+    const organizations = context.featureConfig("organizations") as
+      | { roles?: string[] }
+      | undefined;
+
+    if (parsed.destructiveRoles !== undefined && auth === undefined) {
+      issues.push({
+        code: "feature.crud.destructive-roles-require-auth",
+        path: "/features/crud/destructiveRoles",
+        message: "destructiveRoles requires the 'auth' feature.",
+      });
+    }
+
+    if (auth !== undefined) {
+      const authConfig = auth as { roles?: string[]; userEntity?: string; defaultRole?: string };
+      const userEntity = authConfig.userEntity ?? "User";
+      for (const [entity, owner] of Object.entries(parsed.ownedBy ?? {})) {
+        if (owner !== userEntity) {
+          issues.push({
+            code: "feature.crud.unsupported-owner-entity",
+            path: `/features/crud/ownedBy/${entity}`,
+            message:
+              `CRUD ownership is derived from the authenticated user id, so '${entity}' must be owned by auth.userEntity '${userEntity}', not '${owner}'. Custom owner mapping is not supported yet.`,
+          });
+        }
+      }
+
+      const declaredRoles = auth.roles ?? ["admin", "user"];
+      const registrationRole = authConfig.defaultRole ?? declaredRoles.at(-1) ?? "user";
+      const derivedAdminRoles = declaredRoles.filter((role) => role !== registrationRole).slice(0, 1);
+      const effectiveAdminRoles = parsed.adminRoles ?? derivedAdminRoles;
+      const effectiveDestructiveRoles = parsed.destructiveRoles ?? effectiveAdminRoles;
+
+      if (effectiveAdminRoles.length === 0) {
+        issues.push({
+          code: "feature.crud.no-safe-admin-role",
+          path: "/features/crud/adminRoles",
+          message:
+            "CRUD needs at least one privileged auth role distinct from the self-registration role. Declare another auth role or set a safe adminRoles policy.",
+        });
+      }
+
+      // destructiveRoles inherits adminRoles when unset; re-validating the
+      // inherited copy would just duplicate every adminRoles issue.
+      const rolePolicies: Array<readonly [string, readonly string[]]> = [
+        ["adminRoles", effectiveAdminRoles] as const,
+        ...(parsed.destructiveRoles !== undefined
+          ? [["destructiveRoles", effectiveDestructiveRoles] as const]
+          : []),
+      ];
+
+      for (const [field, roles] of rolePolicies) {
+        for (const [index, role] of roles.entries()) {
+          if (!declaredRoles.includes(role)) {
+            issues.push({
+              code: "feature.crud.unknown-destructive-role",
+              path: `/features/crud/${field}/${index}`,
+              message: `Privileged account role '${role}' is not declared by auth. Expected one of: ${declaredRoles.join(", ")}`,
+            });
+          } else if (role === registrationRole) {
+            issues.push({
+              code: "feature.crud.self-registration-admin-role",
+              path: `/features/crud/${field}/${index}`,
+              message: `Role '${role}' is assigned during self-registration and cannot bypass ownership or authorize destructive operations.`,
+            });
+          }
+        }
+      }
+    }
+
+    if (parsed.destructiveOrgRoles !== undefined && organizations === undefined) {
+      issues.push({
+        code: "feature.crud.destructive-org-roles-require-organizations",
+        path: "/features/crud/destructiveOrgRoles",
+        message: "destructiveOrgRoles requires the 'organizations' feature.",
+      });
+    }
+
+    if (organizations !== undefined && parsed.destructiveOrgRoles !== undefined) {
+      const declaredRoles = organizations.roles ?? ["owner", "admin", "member"];
+      for (const [index, role] of parsed.destructiveOrgRoles.entries()) {
+        if (!declaredRoles.includes(role)) {
+          issues.push({
+            code: "feature.crud.unknown-destructive-org-role",
+            path: `/features/crud/destructiveOrgRoles/${index}`,
+            message: `Destructive organization role '${role}' is not declared by organizations. Expected one of: ${declaredRoles.join(", ")}`,
+          });
+        }
+      }
     }
 
     for (const entity of parsed.softDelete ?? []) {
@@ -146,7 +257,14 @@ export const crudFeature: FeaturePack = {
 
   contribute(context: FeatureContext): FeatureContribution {
     const parsed = config(context.config);
-    const authenticated = context.featureConfig("auth") !== undefined;
+    const auth = context.featureConfig("auth") as
+      | { roles?: string[]; defaultRole?: string }
+      | undefined;
+    const authenticated = auth !== undefined;
+    const accountRoles = auth?.roles ?? ["admin", "user"];
+    const registrationRole = auth?.defaultRole ?? accountRoles.at(-1) ?? "user";
+    const adminRoles =
+      parsed.adminRoles ?? accountRoles.filter((role) => role !== registrationRole).slice(0, 1);
     const endpoints: EndpointDefinition[] = [];
     const permissions: PermissionRule[] = [];
 
@@ -177,6 +295,18 @@ export const crudFeature: FeaturePack = {
         },
       ];
 
+      const organizations = context.featureConfig("organizations") as
+        | { roles?: string[] }
+        | undefined;
+      const orgRoles = organizations?.roles ?? ["owner", "admin", "member"];
+      const destructiveRoles =
+        entity.tenant !== null && organizations !== undefined
+          ? (parsed.destructiveOrgRoles ??
+            orgRoles.slice(0, Math.max(1, orgRoles.length - 1)))
+          : authenticated && entity.ownership === null
+            ? (parsed.destructiveRoles ?? adminRoles)
+            : [];
+
       for (const operation of operations) {
         endpoints.push({
           id: `${entity.name}.${operation.operation}`,
@@ -187,14 +317,16 @@ export const crudFeature: FeaturePack = {
           operation: operation.operation,
           summary: operation.summary,
           auth: authenticated ? "authenticated" : "public",
-          roles: [],
+          // Destructive operations are role-restricted unless row ownership
+          // already limits them to the caller's own records.
+          roles: operation.operation === "delete" ? destructiveRoles : [],
         });
 
         permissions.push({
           feature: "crud",
           entity: entity.name,
           action: operation.operation,
-          roles: parsed.adminRoles ?? [],
+          roles: operation.operation === "delete" ? destructiveRoles : adminRoles,
           requiresOwnership: entity.ownership !== null,
           requiresTenant: entity.tenant !== null,
         });
@@ -207,7 +339,7 @@ export const crudFeature: FeaturePack = {
   renderers: { [TARGET_ID]: crudRenderer },
 
   agentSummary:
-    "Generates REST resources for the listed entities: POST, GET (one and paginated list with filters and sort), PATCH and DELETE. Options: softDelete (list of entities), ownedBy (entity -> owner entity, requires auth), adminRoles, defaultPageSize, maxPageSize.",
+    "Generates REST resources for the listed entities: POST, GET (one and paginated list with filters and sort), PATCH and DELETE. Options: softDelete (list of entities), ownedBy (entity -> owner entity, requires auth), adminRoles, destructiveRoles, destructiveOrgRoles, defaultPageSize, maxPageSize.",
 
   examples: [
     { name: "All entities, defaults", config: {} },

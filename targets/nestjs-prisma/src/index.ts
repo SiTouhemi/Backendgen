@@ -7,6 +7,7 @@ export {
   modelType,
   names,
   outputType,
+  postgresIdentifier,
   readableFields,
   writableFields,
   writableForeignKeys,

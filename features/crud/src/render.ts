@@ -20,17 +20,69 @@ import { sampleExpression } from "./samples.js";
 
 interface CrudSettings {
   adminRoles: string[];
+  destructiveRoles: string[];
+  destructiveOrgRoles: string[] | null;
   defaultPageSize: number;
   maxPageSize: number;
+  accountSetupRole: string;
+  accountDisallowedRole: string | null;
+  organizationSetupRole: string | null;
+  organizationDisallowedRole: string | null;
 }
 
 function settings(context: TargetRenderContext): CrudSettings {
   const config = context.config as Partial<CrudSettings>;
+  const auth = context.featureConfig("auth") as
+    | { roles?: string[]; defaultRole?: string }
+    | undefined;
+  const organizations = context.featureConfig("organizations") as
+    | { roles?: string[] }
+    | undefined;
+  const accountRoles = auth?.roles ?? ["admin", "user"];
+  const registrationRole = auth?.defaultRole ?? accountRoles.at(-1) ?? "user";
+  const orgRoles = organizations?.roles ?? ["owner", "admin", "member"];
+  const adminRoles =
+    config.adminRoles !== undefined && config.adminRoles.length > 0
+      ? config.adminRoles
+      : accountRoles.filter((role) => role !== registrationRole).slice(0, 1);
+  const configuredDestructiveRoles = config.destructiveRoles ?? adminRoles;
+  const destructiveRoles =
+    configuredDestructiveRoles.length > 0
+      ? configuredDestructiveRoles
+      : [accountRoles[0] ?? "admin"];
+  const configuredOrgRoles =
+    organizations === undefined
+      ? null
+      : (config.destructiveOrgRoles ?? orgRoles.slice(0, Math.max(1, orgRoles.length - 1)));
+  const destructiveOrgRoles =
+    configuredOrgRoles === null
+      ? null
+      : configuredOrgRoles.length > 0
+        ? configuredOrgRoles
+        : [orgRoles[0] ?? "owner"];
+
   return {
-    adminRoles: config.adminRoles ?? ["admin"],
+    adminRoles,
+    // Destructive operations default to admin-equivalent roles. Every listed
+    // organization role except the least privileged counts as administrative,
+    // mirroring the organizations feature's own ADMIN_ROLES.
+    destructiveRoles,
+    destructiveOrgRoles,
     defaultPageSize: config.defaultPageSize ?? 20,
     maxPageSize: config.maxPageSize ?? 100,
+    accountSetupRole: destructiveRoles[0] ?? accountRoles[0] ?? "admin",
+    accountDisallowedRole:
+      accountRoles.find((role) => !destructiveRoles.includes(role)) ?? null,
+    organizationSetupRole: destructiveOrgRoles?.[0] ?? null,
+    organizationDisallowedRole:
+      destructiveOrgRoles === null
+        ? null
+        : (orgRoles.find((role) => !destructiveOrgRoles.includes(role)) ?? null),
   };
+}
+
+function stringArguments(values: readonly string[]): string {
+  return values.map((value) => JSON.stringify(value)).join(", ");
 }
 
 function file(path: string, contents: string): RenderedFile {
@@ -158,10 +210,32 @@ export class Update${model}Dto extends PartialType(Create${model}Dto) {}
 
 function queryDto(entity: NormalizedEntity, crud: CrudSettings): string {
   const model = names.model(entity.name);
-  const validators = new Set<string>(["IsIn", "IsOptional"]);
-  const transformers = new Set<string>();
+  const validators = new Set<string>(["IsIn", "IsInt", "IsOptional", "Max", "Min"]);
+  const transformers = new Set<string>(["Type"]);
   const swagger = new Set<string>(["ApiPropertyOptional"]);
-  const body: string[] = [];
+  const body: string[] = [
+    "  @ApiPropertyOptional({ minimum: 1, maximum: 1000, default: 1 })",
+    "  @IsOptional()",
+    "  @Type(() => Number)",
+    "  @IsInt()",
+    "  @Min(1)",
+    "  @Max(1000)",
+    "  page: number = 1;",
+    "",
+    `  @ApiPropertyOptional({ minimum: 1, maximum: ${crud.maxPageSize}, default: ${crud.defaultPageSize} })`,
+    "  @IsOptional()",
+    "  @Type(() => Number)",
+    "  @IsInt()",
+    "  @Min(1)",
+    `  @Max(${crud.maxPageSize})`,
+    `  pageSize: number = ${crud.defaultPageSize};`,
+    "",
+    "  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'desc' })",
+    "  @IsOptional()",
+    "  @IsIn(['asc', 'desc'])",
+    "  order: 'asc' | 'desc' = 'desc';",
+    "",
+  ];
 
   const sortable = sortableFields(entity);
   body.push(
@@ -230,9 +304,8 @@ function queryDto(entity: NormalizedEntity, crud: CrudSettings): string {
     importLine([...transformers], "class-transformer") +
     importLine([...validators], "class-validator") +
     importLine(enums, "@prisma/client") +
-    "import { PaginationQueryDto } from '../../common/pagination';\n" +
     `\n/** Pagination defaults: page size ${crud.defaultPageSize}, maximum ${crud.maxPageSize}. */\n` +
-    `export class Query${model}Dto extends PaginationQueryDto {\n` +
+    `export class Query${model}Dto {\n` +
     body.join("\n").trimEnd() +
     "\n}\n"
   );
@@ -294,8 +367,14 @@ function responseDto(entity: NormalizedEntity): string {
   }
 
   const enums = enumImports(entity);
+  const swaggerImports = [
+    "ApiProperty",
+    ...(entity.softDelete || fields.some((field) => !field.required) || keys.some((key) => !key.required)
+      ? ["ApiPropertyOptional"]
+      : []),
+  ];
   return (
-    "import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';\n" +
+    importLine(swaggerImports, "@nestjs/swagger") +
     importLine(enums, "@prisma/client") +
     `import type { ${names.model(entity.name)} } from '@prisma/client';\n` +
     `\nexport class ${model}ResponseDto {\n` +
@@ -321,6 +400,8 @@ function serviceFile(entity: NormalizedEntity, context: TargetRenderContext): st
   const protectedRelations = writableForeignKeys(entity)
     .map((key) => ({ key, target: context.entity(key.target) }))
     .filter(({ target }) => target.softDelete || target.tenant !== null || target.ownership !== null);
+  const usesAdminRoles =
+    entity.ownership !== null || protectedRelations.some(({ target }) => target.ownership !== null);
 
   const scopeImports = new Set<string>(["RequestScope"]);
   if (entity.ownership) {
@@ -403,7 +484,7 @@ ${searchable.map((field) => `        { ${field.name}: { contains: query.q, mode:
 
   const orderCases = sortableFields(entity)
     .filter((field) => field !== "createdAt")
-    .map((field) => `      case '${field}':\n        return { ${field}: query.order };`)
+    .map((field) => `        case '${field}':\n          return { ${field}: query.order };`)
     .join("\n");
 
   const removeBody = entity.softDelete
@@ -411,9 +492,39 @@ ${searchable.map((field) => `        { ${field.name}: { contains: query.q, mode:
       where: this.scopedWhere({ id }, scope),
       data: { deletedAt: new Date() },
     });`
-    : `    const result = await this.prisma.${delegate}.deleteMany({
-      where: this.scopedWhere({ id }, scope),
-    });`;
+    : `    let result;
+    try {
+      result = await this.prisma.${delegate}.deleteMany({
+        where: this.scopedWhere({ id }, scope),
+      });
+    } catch (error) {
+      // Restrictive foreign keys refuse the delete while dependants exist.
+      // That is a state conflict the caller can resolve, not a bad request.
+      if (isRestrictiveDeleteViolation(error)) {
+        throw new ConflictException(
+          'This ${model} still has related records; delete or detach them first',
+        );
+      }
+      throw error;
+    }`;
+
+  const deleteConflictHelper = entity.softDelete
+    ? ""
+    : `
+/**
+ * Prisma maps ordinary FK failures to P2003, while PostgreSQL ON DELETE
+ * RESTRICT currently arrives as an unknown request error carrying SQLSTATE
+ * 23001. Match only those two database signals so unrelated failures remain
+ * visible as server errors.
+ */
+function isRestrictiveDeleteViolation(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return error.code === 'P2003';
+  }
+
+  return error instanceof Error && /code:\\s*["']23001["']/.test(error.message);
+}
+`;
 
   const relationChecks = protectedRelations
     .map(({ key, target }) => {
@@ -440,8 +551,11 @@ ${clauses.join("\n")}
     }`;
     })
     .join("\n");
+  const relationChecksUseScope = protectedRelations.some(
+    ({ target }) => Boolean(target.tenant || target.ownership),
+  );
 
-  return `import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+  return `import { BadRequestException, ${entity.softDelete ? "" : "ConflictException, "}Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Page, toPage } from '../common/pagination';
 ${importLine([...scopeImports], "../common/scope")}import { PrismaService } from '../prisma/prisma.service';
@@ -450,7 +564,8 @@ import { Query${model}Dto } from './dto/query-${stem}.dto';
 import { Update${model}Dto } from './dto/update-${stem}.dto';
 import { ${model}ResponseDto, to${model}Response } from './dto/${stem}.response.dto';
 
-const ADMIN_ROLES = ${JSON.stringify(crud.adminRoles)};
+${usesAdminRoles ? `const ADMIN_ROLES = ${JSON.stringify(crud.adminRoles)};` : ""}
+${deleteConflictHelper}
 
 /**
  * Generated data access for ${model}. Every read and write goes through
@@ -532,7 +647,7 @@ ${removeBody}
     dto: Partial<Create${model}Dto>,
     scope: RequestScope,
   ): Promise<void> {
-${relationChecks.length > 0 ? relationChecks : "    void dto;\n    void scope;"}
+${relationChecks.length > 0 ? `${relationChecksUseScope ? "" : "    void scope;\n"}${relationChecks}` : "    void dto;\n    void scope;"}
   }
 
   private filters(query: Query${model}Dto): Prisma.${model}WhereInput {
@@ -547,19 +662,55 @@ ${filterLines.join("\n")}${searchBlock}
     scope: RequestScope,
   ): Prisma.${model}WhereInput {
     const clauses: Prisma.${model}WhereInput[] = [where];
-${scopeClauses.join("\n")}
+${entity.tenant || entity.ownership ? "" : "    void scope;\n"}${scopeClauses.join("\n")}
     return { AND: clauses };
   }
 
-  private orderBy(query: Query${model}Dto): Prisma.${model}OrderByWithRelationInput {
-    switch (query.sort) {
+  /** The unique id is always the final sort key, making equal-valued rows deterministic. */
+  private orderBy(query: Query${model}Dto): Prisma.${model}OrderByWithRelationInput[] {
+    const primary = ((): Prisma.${model}OrderByWithRelationInput => {
+      switch (query.sort) {
 ${orderCases}
-      default:
-        return { createdAt: query.order };
-    }
+        default:
+          return { createdAt: query.order };
+      }
+    })();
+
+    return [primary, { id: 'asc' }];
   }
 }
 `;
+}
+
+/**
+ * Guard decoration for destructive routes. Tenant-scoped entities require an
+ * administrative organization role; entities without row ownership require an
+ * administrative account role. Row-owned entities stay open because the
+ * service already restricts every write to the caller's own rows.
+ */
+function destructiveGuard(
+  entity: NormalizedEntity,
+  context: TargetRenderContext,
+  crud: CrudSettings,
+): { decorator: string; importLine: string; forbidden: boolean } {
+  if (entity.tenant !== null && crud.destructiveOrgRoles !== null) {
+    return {
+      decorator: `  @OrgRoles(${stringArguments(crud.destructiveOrgRoles)})\n`,
+      importLine:
+        "import { OrgRoles } from '../organizations/decorators/org-roles.decorator';\n",
+      forbidden: true,
+    };
+  }
+
+  if (context.hasFeature("auth") && entity.ownership === null) {
+    return {
+      decorator: `  @Roles(${stringArguments(crud.destructiveRoles)})\n`,
+      importLine: "import { Roles } from '../auth/decorators/roles.decorator';\n",
+      forbidden: true,
+    };
+  }
+
+  return { decorator: "", importLine: "", forbidden: false };
 }
 
 function controllerFile(entity: NormalizedEntity, context: TargetRenderContext): string {
@@ -567,6 +718,7 @@ function controllerFile(entity: NormalizedEntity, context: TargetRenderContext):
   const stem = names.file(entity.name);
   const resource = names.route(entity.name);
   const authenticated = context.hasFeature("auth");
+  const guard = destructiveGuard(entity, context, settings(context));
 
   return `import {
   Body,
@@ -582,14 +734,14 @@ function controllerFile(entity: NormalizedEntity, context: TargetRenderContext):
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
-  ApiCreatedResponse,${authenticated ? "\n  ApiBearerAuth," : ""}
+  ApiCreatedResponse,${authenticated ? "\n  ApiBearerAuth," : ""}${!entity.softDelete ? "\n  ApiConflictResponse," : ""}${guard.forbidden ? "\n  ApiForbiddenResponse," : ""}
   ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { ApiErrorDto } from '../common/api-error.dto';
-import { Page } from '../common/pagination';
+${guard.importLine}import { ApiErrorDto } from '../common/api-error.dto';
+import { ApiPaginatedResponse, Page } from '../common/pagination';
 import { CurrentScope, RequestScope } from '../common/scope';
 import { Create${model}Dto } from './dto/create-${stem}.dto';
 import { Query${model}Dto } from './dto/query-${stem}.dto';
@@ -613,7 +765,7 @@ export class ${model}Controller {
   }
 
   @Get()
-  @ApiOkResponse({ type: [${model}ResponseDto] })
+  @ApiPaginatedResponse(${model}ResponseDto)
   findMany(
     @Query() query: Query${model}Dto,
     @CurrentScope() scope: RequestScope,
@@ -643,9 +795,9 @@ export class ${model}Controller {
   }
 
   @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiNoContentResponse()
-  @ApiNotFoundResponse({ type: ApiErrorDto })
+${guard.decorator}  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse()${guard.forbidden ? "\n  @ApiForbiddenResponse({ type: ApiErrorDto })" : ""}
+${entity.softDelete ? "" : "  @ApiConflictResponse({ type: ApiErrorDto })\n"}  @ApiNotFoundResponse({ type: ApiErrorDto })
   remove(@Param('id') id: string, @CurrentScope() scope: RequestScope): Promise<void> {
     return this.service.remove(id, scope);
   }
@@ -731,7 +883,11 @@ describe('${model}Service', () => {
 
     expect(page.meta).toEqual({ page: 2, pageSize: 2, total: 3, totalPages: 2 });
     expect(delegate.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ skip: 2, take: 2, orderBy: { createdAt: 'desc' } }),
+      expect.objectContaining({
+        skip: 2,
+        take: 2,
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      }),
     );
   });
 
@@ -896,12 +1052,75 @@ function factoriesFile(context: TargetRenderContext): string {
   return `${lines.join("\n")}\n`;
 }
 
+/** A mutation whose API representation differs from the create fixture. */
+function updateProbe(entity: NormalizedEntity): { field: string; expression: string } | null {
+  for (const field of writableFields(entity)) {
+    const suppliedOnCreate = field.required && field.defaultValue === null;
+
+    if (field.enumValues !== null && field.enumValues.length > 0) {
+      const value = suppliedOnCreate ? field.enumValues[1] : field.enumValues[0];
+      if (value !== undefined) return { field: field.name, expression: JSON.stringify(value) };
+      continue;
+    }
+
+    switch (field.type) {
+      case "string":
+      case "text":
+      case "uuid":
+        return { field: field.name, expression: sampleExpression(entity, field, "json") };
+      case "boolean":
+        return { field: field.name, expression: "true" };
+      case "datetime":
+      case "date":
+        return {
+          field: field.name,
+          expression: "new Date(Date.now() + 60_000).toISOString()",
+        };
+      case "integer":
+        if (!suppliedOnCreate) {
+          return { field: field.name, expression: sampleExpression(entity, field, "json") };
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return null;
+}
+
+function restrictiveDependent(
+  context: TargetRenderContext,
+  parent: NormalizedEntity,
+): { entity: NormalizedEntity; foreignKey: string } | null {
+  for (const candidate of context.ir.entities) {
+    const relation = candidate.relations.find(
+      (item) =>
+        item.owner &&
+        item.target === parent.name &&
+        item.onDelete === "restrict" &&
+        item.foreignKey !== null &&
+        (candidate.tenant === null || parent.tenant !== null),
+    );
+    if (relation?.foreignKey !== null && relation?.foreignKey !== undefined) {
+      return { entity: candidate, foreignKey: relation.foreignKey };
+    }
+  }
+
+  return null;
+}
+
 function e2eFile(entity: NormalizedEntity, context: TargetRenderContext): string {
   const model = names.model(entity.name);
   const stem = names.file(entity.name);
   const resource = names.route(entity.name);
   const authenticated = context.hasFeature("auth");
   const prefix = context.settings.apiPrefix;
+  const crud = settings(context);
+  const delegate = names.delegate(entity.name);
+  const guard = destructiveGuard(entity, context, crud);
+  const probe = updateProbe(entity);
+  const dependent = entity.softDelete ? null : restrictiveDependent(context, entity);
 
   const payloadFields = writableFields(entity)
     .filter((field) => field.required && field.defaultValue === null)
@@ -920,33 +1139,90 @@ function e2eFile(entity: NormalizedEntity, context: TargetRenderContext): string
 
   const factoryImports = [
     ...new Set(
-      writableForeignKeys(entity)
-        .filter((key) => key.required)
-        .map((key) => `create${names.model(key.target)}`),
+      [
+        ...writableForeignKeys(entity)
+          .filter((key) => key.required)
+          .map((key) => `create${names.model(key.target)}`),
+        ...(dependent === null ? [] : [`create${names.model(dependent.entity.name)}`]),
+      ],
     ),
   ].sort();
 
   const tenantScoped = entity.tenant !== null;
-  const authImport = tenantScoped
-    ? "import { registerAccount } from './utils/auth-helper';\n"
-    : authenticated
-      ? "import { authHeaders } from './utils/auth-helper';\n"
+  const emitsTenantDenial =
+    tenantScoped && guard.forbidden && crud.organizationDisallowedRole !== null;
+  const emitsAccountDenial =
+    !tenantScoped && guard.forbidden && crud.accountDisallowedRole !== null;
+  const needsRegister = tenantScoped || (authenticated && emitsAccountDenial);
+  const authSymbols = [
+    ...(needsRegister ? ["registerAccount"] : []),
+    ...(!tenantScoped && authenticated ? ["authHeaders"] : []),
+  ];
+  const authImport =
+    authSymbols.length > 0
+      ? `import { ${authSymbols.join(", ")} } from './utils/auth-helper';\n`
       : "";
   const headerSetup = tenantScoped
-    ? `    const account = await registerAccount(app, prisma, { role: 'admin' });
+    ? `    const account = await registerAccount(app, prisma, { role: ${JSON.stringify(crud.accountSetupRole)} });
     const organization = await request(app.getHttpServer())
       .post('/${prefix}/organizations')
       .set('Authorization', \`Bearer \${account.accessToken}\`)
       .send({ name: uniqueString(24) })
       .expect(201);
     organizationId = organization.body.id as string;
-    headers = {
+${
+  guard.forbidden && crud.organizationSetupRole !== null
+    ? `    await prisma.membership.updateMany({
+      where: { organizationId, userId: account.id },
+      data: { role: ${JSON.stringify(crud.organizationSetupRole)} as never },
+    });
+`
+    : ""
+}    headers = {
       Authorization: \`Bearer \${account.accessToken}\`,
       'X-Organization-Id': organizationId,
     };`
     : authenticated
-      ? "    headers = await authHeaders(app, prisma, { role: 'admin' });"
+      ? `    headers = await authHeaders(app, prisma, { role: ${JSON.stringify(crud.accountSetupRole)} });`
       : "    headers = {};";
+  const restrictiveDeleteTest =
+    dependent === null
+      ? ""
+      : `
+  it('returns conflict and retains data when a dependent restricts deletion', async () => {
+    const payload = await buildPayload();
+    const created = await request(app.getHttpServer())
+      .post('/${prefix}/${resource}')
+      .set(headers)
+      .send(payload)
+      .expect(201);
+    const id = created.body.id as string;
+
+    await create${names.model(dependent.entity.name)}(prisma, {
+      ${dependent.foreignKey}: id,${
+        dependent.entity.tenant === null
+          ? ""
+          : `
+      ${dependent.entity.tenant.foreignKey}: organizationId,`
+      }
+    });
+
+    await request(app.getHttpServer())
+      .delete(\`/${prefix}/${resource}/\${id}\`)
+      .set(headers)
+      .expect(409);
+
+    await request(app.getHttpServer())
+      .get(\`/${prefix}/${resource}/\${id}\`)
+      .set(headers)
+      .expect(200);
+    await expect(
+      prisma.${names.delegate(dependent.entity.name)}.count({
+        where: { ${dependent.foreignKey}: id },
+      }),
+    ).resolves.toBe(1);
+  });
+`;
 
   return `import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -1011,6 +1287,28 @@ ${payloadKeys.join("\n")}
     expect(listed.body.meta.total).toBe(1);
     expect(listed.body.data).toHaveLength(1);
 
+    const revised = await buildPayload();
+${probe === null ? "" : `    revised[${JSON.stringify(probe.field)}] = ${probe.expression};\n`}
+    const updated = await request(app.getHttpServer())
+      .patch(\`/${prefix}/${resource}/\${id}\`)
+      .set(headers)
+      .send(revised)
+      .expect(200);
+
+    expect(updated.body.id).toBe(id);
+${
+  probe === null
+    ? ""
+    : `    expect(updated.body[${JSON.stringify(probe.field)}]).toEqual(revised[${JSON.stringify(probe.field)}]);
+
+    const persisted = await request(app.getHttpServer())
+      .get(\`/${prefix}/${resource}/\${id}\`)
+      .set(headers)
+      .expect(200);
+    expect(persisted.body[${JSON.stringify(probe.field)}]).toEqual(revised[${JSON.stringify(probe.field)}]);
+`
+}
+
     await request(app.getHttpServer())
       .delete(\`/${prefix}/${resource}/\${id}\`)
       .set(headers)
@@ -1020,7 +1318,17 @@ ${payloadKeys.join("\n")}
       .get(\`/${prefix}/${resource}/\${id}\`)
       .set(headers)
       .expect(404);
-  });
+${
+    entity.softDelete
+      ? `
+    // Soft delete hides the row from the API but retains it, and everything
+    // that references it, in the database.
+    const retained = await prisma.${delegate}.findUnique({ where: { id } });
+    expect(retained).not.toBeNull();
+    expect(retained?.deletedAt).not.toBeNull();
+`
+      : ""
+  }  });
 
   it('rejects a payload that violates the specification', async () => {
     await request(app.getHttpServer())
@@ -1029,7 +1337,67 @@ ${payloadKeys.join("\n")}
       .send({ unexpectedProperty: uniqueString(4) })
       .expect(400);
   });
-});
+${restrictiveDeleteTest}
+${
+    emitsTenantDenial
+      ? `
+  it('refuses destructive operations for a disallowed organization role', async () => {
+    const payload = await buildPayload();
+    const created = await request(app.getHttpServer())
+      .post('/${prefix}/${resource}')
+      .set(headers)
+      .send(payload)
+      .expect(201);
+    const id = created.body.id as string;
+
+    const member = await registerAccount(app, prisma, { role: ${JSON.stringify(crud.accountSetupRole)} });
+    await prisma.membership.create({
+      data: {
+        organizationId,
+        userId: member.id,
+        role: ${JSON.stringify(crud.organizationDisallowedRole)} as never,
+      },
+    });
+    const memberHeaders = {
+      Authorization: \`Bearer \${member.accessToken}\`,
+      'X-Organization-Id': organizationId,
+    };
+
+    await request(app.getHttpServer())
+      .delete(\`/${prefix}/${resource}/\${id}\`)
+      .set(memberHeaders)
+      .expect(403);
+
+    // The member may still read the row; only destruction is restricted.
+    await request(app.getHttpServer())
+      .get(\`/${prefix}/${resource}/\${id}\`)
+      .set(memberHeaders)
+      .expect(200);
+  });
+`
+      : emitsAccountDenial
+        ? `
+  it('refuses deletion without an administrative role', async () => {
+    const payload = await buildPayload();
+    const created = await request(app.getHttpServer())
+      .post('/${prefix}/${resource}')
+      .set(headers)
+      .send(payload)
+      .expect(201);
+    const id = created.body.id as string;
+
+    const outsider = await registerAccount(app, prisma, {
+      role: ${JSON.stringify(crud.accountDisallowedRole)},
+    });
+
+    await request(app.getHttpServer())
+      .delete(\`/${prefix}/${resource}/\${id}\`)
+      .set({ Authorization: \`Bearer \${outsider.accessToken}\` })
+      .expect(403);
+  });
+`
+        : ""
+  }});
 `;
 }
 

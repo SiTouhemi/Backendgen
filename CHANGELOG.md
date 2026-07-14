@@ -4,6 +4,17 @@
 
 ### Release-readiness pass
 
+- Added explicit `restrict` / `cascade` / `setNull` relation semantics, deterministic PostgreSQL-safe constraint names, automatic foreign-key indexes, UTC `TIMESTAMPTZ(3)` columns, and Prisma/DDL parity tests.
+- Hardened destructive CRUD routes with validated account/organization role policies, fail-closed guards, PostgreSQL `RESTRICT` conflict mapping, PATCH persistence coverage, stable pagination tie-breakers, bounded configured page sizes, and accurate paginated OpenAPI schemas.
+- Made account registration/session creation atomic, password reset/session revocation transactional, recovery requests enumeration-resistant, and every auth path reject soft-deleted accounts.
+- Added automatic recovery notifications with validated public links and delivering-provider validation. Production recovery links require HTTPS; the metadata-only log provider cannot satisfy recovery delivery.
+- Added a transactional PostgreSQL notification outbox with leased `SKIP LOCKED` dispatch, bounded persisted retry/backoff, terminal payload clearing, soft-deleted-recipient exclusion, and real-database integration coverage. Custom providers are supported through `CustomModule`; the mock provider is test-only.
+- Scoped reservation idempotency by owner/tenant and canonical request fingerprint, validated resources before policy/cleanup, drained all expired-hold batches, made availability reject missing resources, and aligned no-hold IR with the emitted API.
+- Split liveness from database readiness, added readiness/OpenAPI integration tests, and enabled strict generated-project TypeScript across feature combinations.
+- The test-only mock provider now takes precedence over a registered custom provider under `NODE_ENV=test`, so generated integration tests stay hermetic in projects that ship their own transport.
+- Deduplicated destructive-role validation when `destructiveRoles` inherits `adminRoles`, and repaired the auth-role validation type error.
+- Verified the complete coworking proof project on Windows against real PostgreSQL: strict build, 33 unit and 33 integration tests, six-scenario matrix, byte-identical custom code across regeneration, zero `npm audit` findings, and a 40-step live HTTP flow covering recovery links, idempotency, overlap races, hold expiry, destructive-role refusal, tenant isolation, and 503 readiness during a database outage.
+
 - Added `backendgen init` to scaffold a valid starter specification.
 - Added a full specification reference, per-feature configuration docs, a customization walkthrough, and a migrations/schema-evolution guide (`docs/MIGRATIONS.md`).
 - Added one complete example specification per end-to-end scenario (`examples/`).

@@ -2,7 +2,7 @@
 
 Backend Compiler is a local-first, deterministic backend generator for coding agents. An agent writes a compact `backendcompiler.dev/v1` YAML or JSON specification; the compiler validates it, creates framework-neutral IR, and generates a tested NestJS 11 + Prisma 6 + PostgreSQL repository.
 
-Version 0.2.0 includes CRUD, authentication, organizations and tenant isolation, reservations with PostgreSQL overlap prevention, and notifications. It also provides the `backendgen` CLI and twelve MCP tools. FastAPI and hosted SaaS infrastructure are intentionally out of scope.
+Version 0.2.0 includes CRUD, authentication, organizations and tenant isolation, reservations with PostgreSQL overlap prevention, and notifications with a transactional outbox. It also provides the `backendgen` CLI and twelve MCP tools. FastAPI and hosted SaaS infrastructure are intentionally out of scope.
 
 ## Requirements
 
@@ -59,6 +59,8 @@ target an existing database instead, export `DATABASE_URL` and
 Generated files and user code are separated. Files marked `generated` in `.backendgen/manifest.json` are compiler-owned. Files marked `custom-scaffold` are written once and never overwritten. Generation refuses to replace locally modified generated files unless `--force` is explicit.
 
 Regenerating after an entity change rewrites the initial migration; read [migrations and schema evolution](docs/MIGRATIONS.md) before deploying over an applied migration.
+
+Account verification/reset requires the notifications feature with a delivering `resend` or `custom` provider. The `log` provider is a metadata-only sink and intentionally never prints recipients, bodies, links, or tokens. Generated production recovery links require an HTTPS `APP_PUBLIC_URL`.
 
 Start with [the architecture](docs/ARCHITECTURE.md), [specification reference](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [customization](docs/CUSTOMIZATION.md), [migrations](docs/MIGRATIONS.md), [local release testing](docs/LOCAL_TESTING.md), [local verification record](docs/LOCAL_VERIFICATION.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), [threat model](docs/THREAT_MODEL.md), and [latest generated-code security review](docs/SECURITY_REVIEW_2026-07-14.md).
 

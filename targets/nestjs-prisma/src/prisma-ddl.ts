@@ -1,5 +1,10 @@
-import type { BackendIR, NormalizedEntity, NormalizedField } from "@backend-compiler/compiler";
-import { enumFields, foreignKeys, names } from "./naming.js";
+import type {
+  BackendIR,
+  NormalizedEntity,
+  NormalizedField,
+  NormalizedRelation,
+} from "@backend-compiler/compiler";
+import { databaseNames, enumFields, foreignKeys, names, standaloneIndexes } from "./naming.js";
 
 const SCALAR_TO_SQL: Readonly<Record<string, string>> = {
   string: "TEXT",
@@ -7,10 +12,24 @@ const SCALAR_TO_SQL: Readonly<Record<string, string>> = {
   integer: "INTEGER",
   decimal: "DECIMAL(65,30)",
   boolean: "BOOLEAN",
-  datetime: "TIMESTAMP(3)",
+  datetime: "TIMESTAMPTZ(3)",
   date: "DATE",
   uuid: "TEXT",
 };
+
+const ON_DELETE_TO_SQL: Readonly<Record<NormalizedRelation["onDelete"], string>> = {
+  restrict: "RESTRICT",
+  cascade: "CASCADE",
+  setNull: "SET NULL",
+};
+
+function sqlOnDelete(action: NormalizedRelation["onDelete"]): string {
+  const rendered = ON_DELETE_TO_SQL[action];
+  if (rendered === undefined) {
+    throw new Error(`Unsupported or missing IR referential action: ${String(action)}`);
+  }
+  return rendered;
+}
 
 function sqlType(entity: NormalizedEntity, field: NormalizedField): string {
   if (field.enumValues) {
@@ -29,12 +48,12 @@ function sqlDefault(field: NormalizedField): string {
 function columnLines(entity: NormalizedEntity): string[] {
   const columns: string[] = [
     '    "id" TEXT NOT NULL',
-    '    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP',
-    '    "updatedAt" TIMESTAMP(3) NOT NULL',
+    '    "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP',
+    '    "updatedAt" TIMESTAMPTZ(3) NOT NULL',
   ];
 
   if (entity.softDelete) {
-    columns.push('    "deletedAt" TIMESTAMP(3)');
+    columns.push('    "deletedAt" TIMESTAMPTZ(3)');
   }
 
   for (const field of entity.fields) {
@@ -48,7 +67,9 @@ function columnLines(entity: NormalizedEntity): string[] {
     columns.push(`    "${key.name}" TEXT${key.required ? " NOT NULL" : ""}`);
   }
 
-  columns.push(`    CONSTRAINT "${entity.name}_pkey" PRIMARY KEY ("id")`);
+  columns.push(
+    `    CONSTRAINT "${databaseNames.primaryKey(entity.name)}" PRIMARY KEY ("id")`,
+  );
   return columns;
 }
 
@@ -67,7 +88,7 @@ function createIndexes(entity: NormalizedEntity): string[] {
   for (const field of entity.fields) {
     if (field.unique) {
       statements.push(
-        `CREATE UNIQUE INDEX "${entity.name}_${field.name}_key" ON "${entity.name}"("${field.name}");`,
+        `CREATE UNIQUE INDEX "${databaseNames.index(entity.name, [field.name], true)}" ON "${entity.name}"("${field.name}");`,
       );
     }
   }
@@ -75,23 +96,16 @@ function createIndexes(entity: NormalizedEntity): string[] {
   for (const key of foreignKeys(entity)) {
     if (key.unique) {
       statements.push(
-        `CREATE UNIQUE INDEX "${entity.name}_${key.name}_key" ON "${entity.name}"("${key.name}");`,
+        `CREATE UNIQUE INDEX "${databaseNames.index(entity.name, [key.name], true)}" ON "${entity.name}"("${key.name}");`,
       );
     }
   }
 
-  for (const index of entity.indexes) {
+  for (const index of standaloneIndexes(entity)) {
     const columns = index.fields.map((field) => `"${field}"`).join(", ");
-    const suffix = index.unique ? "key" : "idx";
-    const name = `${entity.name}_${index.fields.join("_")}_${suffix}`;
+    const name = databaseNames.index(entity.name, index.fields, index.unique);
     statements.push(
       `CREATE${index.unique ? " UNIQUE" : ""} INDEX "${name}" ON "${entity.name}"(${columns});`,
-    );
-  }
-
-  if (entity.softDelete) {
-    statements.push(
-      `CREATE INDEX "${entity.name}_deletedAt_idx" ON "${entity.name}"("deletedAt");`,
     );
   }
 
@@ -102,9 +116,9 @@ function foreignKeyStatements(entity: NormalizedEntity): string[] {
   return entity.relations
     .filter((relation) => relation.owner && relation.foreignKey !== null)
     .map((relation) => {
-      const onDelete = relation.required ? "CASCADE" : "SET NULL";
+      const onDelete = sqlOnDelete(relation.onDelete);
       return (
-        `ALTER TABLE "${entity.name}" ADD CONSTRAINT "${entity.name}_${relation.foreignKey}_fkey" ` +
+        `ALTER TABLE "${entity.name}" ADD CONSTRAINT "${databaseNames.foreignKey(entity.name, relation.foreignKey!)}" ` +
         `FOREIGN KEY ("${relation.foreignKey}") REFERENCES "${relation.target}"("id") ` +
         `ON DELETE ${onDelete} ON UPDATE CASCADE;`
       );

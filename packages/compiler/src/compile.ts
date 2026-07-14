@@ -54,6 +54,7 @@ function specEntityToDraft(name: string, definition: EntityDefinition): DraftEnt
         target: relation.target,
       };
       if (relation.required !== undefined) result.required = relation.required;
+      if (relation.onDelete !== undefined) result.onDelete = relation.onDelete;
       return result;
     }),
     indexes: (definition.indexes ?? []).map((index) => ({
@@ -115,7 +116,13 @@ export function applyEntityContributions(
 
     for (const field of patch.addFields ?? []) {
       if (entity.fields.some((existing) => existing.name === field.name)) {
-        continue;
+        throw new CompilerError(`Field '${patch.entity}.${field.name}' is reserved by a feature`, [
+          issue(
+            "feature.field-conflict",
+            `/entities/${patch.entity}/fields/${field.name}`,
+            `A feature must add '${patch.entity}.${field.name}', but that field is already declared. Remove the conflicting field so the feature can enforce its required type and security flags.`,
+          ),
+        ]);
       }
       entity.fields.push(structuredClone(field));
     }
@@ -123,7 +130,16 @@ export function applyEntityContributions(
     for (const relation of patch.addRelations ?? []) {
       entity.relations ??= [];
       if (entity.relations.some((existing) => existing.name === relation.name)) {
-        continue;
+        throw new CompilerError(
+          `Relation '${patch.entity}.${relation.name}' is reserved by a feature`,
+          [
+            issue(
+              "feature.relation-conflict",
+              `/entities/${patch.entity}/relations/${relation.name}`,
+              `A feature must add '${patch.entity}.${relation.name}', but that relation is already declared. Remove the conflicting relation so the feature can enforce its ownership and referential rules.`,
+            ),
+          ],
+        );
       }
       entity.relations.push(structuredClone(relation));
     }
@@ -222,6 +238,29 @@ function deriveRelationSides(entities: DraftEntity[]): Map<string, NormalizedRel
         ]);
       }
 
+      if (
+        (relation.type === "hasMany" || relation.type === "manyToMany") &&
+        relation.required !== undefined
+      ) {
+        throw new CompilerError("Collection relations cannot be required", [
+          issue(
+            "semantic.collection-relation-required-unsupported",
+            `/entities/${entity.name}/relations/${relation.name}/required`,
+            `Relation '${relation.name}' is ${relation.type}; required only applies to belongsTo and hasOne relations that own a foreign key`,
+          ),
+        ]);
+      }
+
+      if (relation.type === "manyToMany" && relation.onDelete !== undefined) {
+        throw new CompilerError("manyToMany does not support onDelete", [
+          issue(
+            "semantic.many-to-many-on-delete-unsupported",
+            `/entities/${entity.name}/relations/${relation.name}/onDelete`,
+            "manyToMany has no owning foreign key in this IR; model the join table explicitly to control its referential actions",
+          ),
+        ]);
+      }
+
       const relationName = `${entity.name}${pascalCase(relation.name)}`;
       const targetTaken = takenNames.get(relation.target)!;
 
@@ -236,17 +275,37 @@ function deriveRelationSides(entities: DraftEntity[]): Map<string, NormalizedRel
       const foreignKey = relation.foreignKey ?? `${camelCase(relation.name)}Id`;
       const inverseForeignKey = relation.foreignKey ?? `${camelCase(inverseName)}Id`;
 
+      // Deleting a parent must not silently destroy dependants: restrict is the
+      // default for a required owning relation and cascade is explicit only.
+      // A declared hasMany places an optional foreign key on its derived
+      // inverse side, so setNull is its safe default.
+      const required = relation.required ?? false;
+      const onDelete =
+        relation.onDelete ??
+        (declaredOwnsForeignKey && required ? "restrict" : "setNull");
+
+      if (onDelete === "setNull" && declaredOwnsForeignKey && required) {
+        throw new CompilerError("setNull requires an optional relation", [
+          issue(
+            "semantic.set-null-requires-optional-relation",
+            `/entities/${entity.name}/relations/${relation.name}/onDelete`,
+            "onDelete: setNull cannot apply to a required relation; the foreign key cannot become null",
+          ),
+        ]);
+      }
+
       const declared: NormalizedRelation = {
         name: relation.name,
         type: relation.type,
         target: relation.target,
-        required: relation.required ?? false,
+        required,
         origin: "declared",
         inverseName,
         relationName,
         owner: declaredOwnsForeignKey,
         foreignKey: declaredOwnsForeignKey ? foreignKey : null,
         unique: relation.type === "hasOne",
+        onDelete,
       };
 
       const inverseType: NormalizedRelation["type"] =
@@ -269,6 +328,9 @@ function deriveRelationSides(entities: DraftEntity[]): Map<string, NormalizedRel
         owner: relation.type === "hasMany",
         foreignKey: relation.type === "hasMany" ? inverseForeignKey : null,
         unique: relation.type === "hasOne",
+        // For a declared hasMany the derived inverse owns the (optional)
+        // foreign key, so the declared side's onDelete applies here.
+        onDelete,
       };
 
       sides.get(entity.name)!.push({ entity: entity.name, relation: declared });
@@ -286,8 +348,72 @@ function deriveRelationSides(entities: DraftEntity[]): Map<string, NormalizedRel
   return result;
 }
 
+function validateImplicitNames(
+  drafts: readonly DraftEntity[],
+  relations: ReadonlyMap<string, readonly NormalizedRelation[]>,
+): void {
+  for (const draft of drafts) {
+    const reserved = new Set(["id", "createdAt", "updatedAt"]);
+    if (draft.softDelete) reserved.add("deletedAt");
+
+    for (const field of draft.fields) {
+      if (reserved.has(field.name)) {
+        throw new CompilerError(`Field '${draft.name}.${field.name}' is reserved`, [
+          issue(
+            "semantic.reserved-field-name",
+            `/entities/${draft.name}/fields/${field.name}`,
+            `Field '${field.name}' is generated by the target for every ${draft.softDelete ? "matching " : ""}entity and cannot be declared explicitly.`,
+          ),
+        ]);
+      }
+    }
+
+    const scalarNames = new Set(draft.fields.map((field) => field.name));
+    const relationNames = new Set<string>();
+    const foreignKeyNames = new Set<string>();
+
+    for (const relation of relations.get(draft.name) ?? []) {
+      if (reserved.has(relation.name) || scalarNames.has(relation.name)) {
+        throw new CompilerError(`Relation '${draft.name}.${relation.name}' collides with a field`, [
+          issue(
+            "semantic.relation-field-name-conflict",
+            `/entities/${draft.name}/relations/${relation.name}`,
+            `Relation '${relation.name}' conflicts with a scalar or generated field on '${draft.name}'.`,
+          ),
+        ]);
+      }
+      relationNames.add(relation.name);
+    }
+
+    for (const relation of relations.get(draft.name) ?? []) {
+      const foreignKey = relation.foreignKey;
+      if (!relation.owner || foreignKey === null) continue;
+
+      if (
+        reserved.has(foreignKey) ||
+        scalarNames.has(foreignKey) ||
+        relationNames.has(foreignKey) ||
+        foreignKeyNames.has(foreignKey)
+      ) {
+        throw new CompilerError(
+          `Foreign key '${draft.name}.${foreignKey}' collides with another field`,
+          [
+            issue(
+              "semantic.foreign-key-name-conflict",
+              `/entities/${draft.name}/relations/${relation.name}/foreignKey`,
+              `Relation '${relation.name}' generates foreign key '${foreignKey}', which conflicts with another scalar, relation, or generated field on '${draft.name}'.`,
+            ),
+          ],
+        );
+      }
+      foreignKeyNames.add(foreignKey);
+    }
+  }
+}
+
 export function normalizeEntities(drafts: DraftEntity[]): NormalizedEntity[] {
   const relations = deriveRelationSides(drafts);
+  validateImplicitNames(drafts, relations);
 
   return [...drafts].sort(byName).map((draft) => {
     const fields = [...draft.fields].sort(byName).map(normalizeField);

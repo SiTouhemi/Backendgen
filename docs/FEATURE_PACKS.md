@@ -14,8 +14,12 @@ REST CRUD endpoints per entity: paginated list with filtering and sorting, get, 
 | `softDelete` | string[] | `[]` | Delete sets `deletedAt` instead of removing the row. |
 | `ownedBy` | object | `{}` | Entity → owner-entity map. Rows readable/writable only by their owner or an admin role. Requires `auth`. |
 | `adminRoles` | string[] | `["admin"]` | Roles that bypass ownership scoping. |
+| `destructiveRoles` | string[] | `adminRoles` | Account roles allowed to delete non-tenant entities that are not row-owned. Must be declared by `auth`. |
+| `destructiveOrgRoles` | string[] | all organization roles except the least privileged | Organization roles allowed to delete tenant-scoped entities. Must be declared by `organizations`. |
 | `defaultPageSize` | integer | 20 | 1–200. Must not exceed `maxPageSize`. |
 | `maxPageSize` | integer | 100 | 1–500. |
+
+`ownedBy` currently maps only to `auth.userEntity`: generated services write the authenticated user ID into the owner foreign key. A different owner entity is rejected at compile time instead of producing a backend that fails every write.
 
 ```yaml
 features:
@@ -41,7 +45,7 @@ Email/password authentication: bcrypt hashing (cost 12, 72-byte ceiling), JWT ac
 | `minPasswordLength` | integer | 12 | 8–72 (bcrypt's safe ceiling). |
 | `rateLimit` | object | `{ ttlSeconds: 60, limit: 10 }` | Process-local login throttle. Use a shared store behind a load balancer. |
 
-Secrets: `JWT_ACCESS_SECRET` (min 32 chars) is required at boot; there is no default and no fallback.
+Secrets: `JWT_ACCESS_SECRET` (min 32 chars) is required at boot; there is no default and no fallback. Enabling either recovery flow also requires the `notifications` feature with a delivering `resend` or `custom` provider. The metadata-only `log` provider is deliberately rejected for recovery because it discards links. If the auth entity is soft-deletable, login, JWT validation, refresh, account recovery, and `/auth/me` all require `deletedAt: null`; refresh sessions are revoked when a deleted account attempts rotation.
 
 ## organizations
 
@@ -58,7 +62,7 @@ Depends on `auth`.
 
 ## reservations
 
-Time-interval booking of a resource: hold → confirm → cancel lifecycle (or immediate confirmation when holds are disabled), idempotency keys with owner/tenant-scoped replay, availability queries, batched hold expiry, and — on PostgreSQL — a `btree_gist` exclusion constraint so overlapping reservations are impossible at the database level, not just the application level.
+Time-interval booking of a resource: hold → confirm → cancel lifecycle (or immediate confirmation when holds are disabled), idempotency keys with owner/tenant-scoped replay and request fingerprints, resource-scoped availability queries, draining batched hold expiry, and — on PostgreSQL — a `btree_gist` exclusion constraint over `tstzrange` so overlapping reservations are impossible at the database level, not just the application level.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
@@ -71,18 +75,20 @@ Time-interval booking of a resource: hold → confirm → cancel lifecycle (or i
 | `maxDurationMinutes` | integer | 43200 | |
 | `cancellationWindowMinutes` | integer | 0 | Minutes before start after which cancellation is refused. |
 
-Depends on `auth`. Emits `reservation.created` / `confirmed` / `cancelled` / `expired` events.
+Depends on `auth`, and `owner` must equal `auth.userEntity` until custom principal mapping is implemented. A repeated idempotency key returns the original reservation only when the canonical resource/start/end fingerprint matches; a changed payload returns 409. `holdMinutes: 0` removes the confirm endpoint, expiry job, and HELD/EXPIRED workflow states. Emits `reservation.created`, `reservation.confirmed`, and `reservation.cancelled`; hold-enabled configurations also emit `reservation.expired`.
 
 ## notifications
 
-Event-driven outbound messages behind a provider interface. Providers: `log` (metadata-only, never logs recipients or bodies) and `resend` (HTTP with a 10-second timeout; permanent 4xx failures are not retried). The reservation and auth services never know how a message is delivered — they emit domain events.
+Event-driven outbound messages behind a provider interface. Non-secret events use a transactional PostgreSQL outbox: domain state and enqueue commit together, workers claim rows with `FOR UPDATE SKIP LOCKED`, provider calls use leases, and retry/backoff state is persisted. Delivery is at least once, so custom providers should use their own idempotency support. Recovery credentials are the deliberate exception: raw tokens are never persisted and are delivered inline with bounded retries.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `provider` | `log` \| `resend` | `"log"` | Overridable at runtime with `NOTIFICATIONS_PROVIDER`. |
+| `provider` | `log` \| `resend` \| `custom` | `"log"` | Overridable at runtime with `NOTIFICATIONS_PROVIDER`. `log` is a non-delivering metadata sink; `custom` requires `CUSTOM_NOTIFICATION_PROVIDER` from `CustomModule`. `mock` is test-only. |
 | `from` | string | `"no-reply@example.com"` | Overridable with `NOTIFICATIONS_FROM`. |
 | `events` | string[] | `[]` | `user_registered`, `user_email_verification_requested`, `user_password_reset_requested`, `reservation_created`, `reservation_confirmed`, `reservation_cancelled`, `reservation_expired`. Reservation events require the `reservations` feature. |
-| `maxAttempts` | integer | 3 | 1–10 delivery attempts before the failure is logged and dropped. |
+| `maxAttempts` | integer | 3 | 1–10. Recovery retries inline; outbox retry state is persisted and terminal rows have sensitive payloads cleared. |
+
+When auth enables verification or reset, those events are added automatically and `APP_PUBLIC_URL` is required. It must be an HTTP(S) origin without credentials/path/query/fragment, and production requires HTTPS. Durable event payloads contain only record identifiers; recipient addresses are resolved at dispatch time and soft-deleted accounts are excluded.
 
 ## Writing a new pack
 

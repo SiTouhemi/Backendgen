@@ -1,4 +1,4 @@
-import type { FieldType, RelationType } from "@backend-compiler/specification";
+import type { FieldType, RelationOnDelete, RelationType } from "@backend-compiler/specification";
 import type { EntityScope, NormalizedIndex } from "./ir.js";
 
 /**
@@ -31,6 +31,12 @@ export interface DraftRelation {
   inverseName?: string;
   /** Override the generated foreign key name on the owning entity. */
   foreignKey?: string;
+  /**
+   * Referential action for the owning foreign key. On `hasMany`, this applies
+   * to the derived foreign key on the target entity. It is unsupported on
+   * `manyToMany`, whose join-table semantics are target-specific.
+   */
+  onDelete?: RelationOnDelete;
 }
 
 export interface DraftEntity {

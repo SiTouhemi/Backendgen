@@ -35,7 +35,10 @@ function tokenEntity(name: string, userEntity: string, purpose: string): DraftEn
       { name: "expiresAt", type: "datetime", required: true },
       { name: "consumedAt", type: "datetime", required: false },
     ],
-    relations: [{ name: "user", type: "belongsTo", target: userEntity, required: true }],
+    relations: [
+      // Tokens are not historical records; they die with the account.
+      { name: "user", type: "belongsTo", target: userEntity, required: true, onDelete: "cascade" },
+    ],
   };
 }
 
@@ -97,7 +100,9 @@ export const authFeature: FeaturePack = {
             description: "Digest of the session that superseded this one, for reuse detection.",
           },
         ],
-        relations: [{ name: "user", type: "belongsTo", target: user, required: true }],
+        relations: [
+          { name: "user", type: "belongsTo", target: user, required: true, onDelete: "cascade" },
+        ],
         indexes: [{ fields: ["expiresAt"], unique: false }],
       },
     ];

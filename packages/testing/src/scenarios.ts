@@ -67,8 +67,8 @@ export const SCENARIOS: Scenario[] = [
       description: "Accounts, roles and per-row ownership",
       entities: { ...USER_ENTITY, ...NOTE_ENTITY },
       features: {
-        crud: { ownedBy: { Note: "User" }, softDelete: ["Note"] },
-        auth: { roles: ["admin", "member"] },
+        crud: { ownedBy: { Note: "User" }, softDelete: ["Note", "User"] },
+        auth: { roles: ["admin", "member"], emailVerification: false, passwordReset: false },
       },
     }),
   },
@@ -102,7 +102,7 @@ export const SCENARIOS: Scenario[] = [
       },
       features: {
         crud: {},
-        auth: { roles: ["admin", "member"] },
+        auth: { roles: ["admin", "member"], emailVerification: false, passwordReset: false },
         organizations: { roles: ["owner", "admin", "member"] },
       },
     }),
@@ -134,7 +134,11 @@ export const SCENARIOS: Scenario[] = [
       },
       features: {
         crud: { softDelete: ["Room"] },
-        auth: { roles: ["admin", "customer"] },
+        auth: {
+          roles: ["admin", "customer"],
+          emailVerification: false,
+          passwordReset: false,
+        },
         reservations: { resource: "Room", owner: "User", preventOverlap: true, holdMinutes: 15 },
         notifications: {
           provider: "log",
@@ -162,7 +166,11 @@ export const SCENARIOS: Scenario[] = [
       },
       features: {
         crud: {},
-        auth: { roles: ["admin", "patient"] },
+        auth: {
+          roles: ["admin", "patient"],
+          emailVerification: false,
+          passwordReset: false,
+        },
         reservations: {
           entity: "Appointment",
           resource: "Practitioner",
@@ -197,12 +205,12 @@ export const SCENARIOS: Scenario[] = [
         },
       },
       features: {
-        crud: { softDelete: ["Desk"] },
+        crud: { softDelete: ["Desk", "User"] },
         auth: { roles: ["admin", "member"] },
         organizations: { roles: ["owner", "admin", "member"] },
         reservations: { resource: "Desk", owner: "User", holdMinutes: 10 },
         notifications: {
-          provider: "log",
+          provider: "resend",
           events: ["user_registered", "reservation_confirmed", "reservation_cancelled"],
         },
       },

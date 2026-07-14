@@ -97,9 +97,19 @@ export function requireAccessSecret(): string {
 
 function tokenService(config: AuthConfig, user: NormalizedEntity): string {
   const delegate = names.delegate(user.name);
+  const deletedAccountGuard = user.softDelete
+    ? `
+    if (session.user.deletedAt !== null) {
+      await this.revokeAllSessions(session.userId);
+      throw new UnauthorizedException('Account no longer exists');
+    }
+`
+    : "";
+  const activeAccountFilter = user.softDelete ? ", deletedAt: null" : "";
 
   return `import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { createOpaqueToken, digestToken } from './hash';
 
@@ -116,6 +126,8 @@ export interface TokenPair {
   expiresIn: number;
 }
 
+type SessionClient = Pick<Prisma.TransactionClient, 'refreshSession'>;
+
 /**
  * Refresh sessions are server-managed and rotate on every use. Presenting a
  * refresh token that has already been rotated is treated as theft: every session
@@ -128,10 +140,13 @@ export class TokenService {
     private readonly jwt: JwtService,
   ) {}
 
-  async issue(account: { id: string }): Promise<TokenPair> {
+  async issue(
+    account: { id: string },
+    client: SessionClient = this.prisma,
+  ): Promise<TokenPair> {
     const material = await this.createTokenMaterial(account.id);
 
-    await this.prisma.refreshSession.create({
+    await client.refreshSession.create({
       data: {
         tokenHash: material.tokenHash,
         userId: account.id,
@@ -152,7 +167,7 @@ export class TokenService {
     if (session === null) {
       throw new UnauthorizedException('Invalid refresh token');
     }
-
+${deletedAccountGuard}
     if (session.revokedAt !== null) {
       await this.revokeAllSessions(session.userId);
       throw new UnauthorizedException('Refresh token has already been used');
@@ -199,16 +214,19 @@ export class TokenService {
     });
   }
 
-  async revokeAllSessions(userId: string): Promise<void> {
-    await this.prisma.refreshSession.updateMany({
+  async revokeAllSessions(
+    userId: string,
+    client: SessionClient = this.prisma,
+  ): Promise<void> {
+    await client.refreshSession.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }
 
   async findAccount(id: string): Promise<{ id: string; email: string; role: string } | null> {
-    return this.prisma.${delegate}.findUnique({
-      where: { id },
+    return this.prisma.${delegate}.findFirst({
+      where: { id${activeAccountFilter} },
       select: { id: true, email: true, role: true },
     });
   }
@@ -233,6 +251,7 @@ export class TokenService {
 
 function jwtStrategy(user: NormalizedEntity): string {
   const delegate = names.delegate(user.name);
+  const activeAccountFilter = user.softDelete ? ", deletedAt: null" : "";
 
   return `import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
@@ -264,8 +283,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * takes effect immediately instead of at the next token refresh.
    */
   async validate(payload: AccessTokenPayload): Promise<AuthenticatedUser> {
-    const account = await this.prisma.${delegate}.findUnique({
-      where: { id: payload.sub },
+    const account = await this.prisma.${delegate}.findFirst({
+      where: { id: payload.sub${activeAccountFilter} },
       select: { id: true, email: true, role: true },
     });
 
@@ -300,7 +319,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext): boolean | Promise<boolean> | Observable<boolean> {
+  override canActivate(context: ExecutionContext): boolean | Promise<boolean> | Observable<boolean> {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
@@ -333,8 +352,14 @@ export class RolesGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    if (required === undefined || required.length === 0) {
+    if (required === undefined) {
       return true;
+    }
+
+    // Empty role metadata is a configuration error and must never turn a
+    // protected route into an unrestricted one.
+    if (required.length === 0) {
+      throw new ForbiddenException('This operation has no authorized roles configured');
     }
 
     const request = context.switchToHttp().getRequest<RequestWithUser>();
@@ -377,7 +402,7 @@ export const CurrentUser = createParamDecorator(
 function dtoFile(config: AuthConfig, user: NormalizedEntity): string {
   const extraFields = writableFields(user).filter((field) => field.name !== "email");
   const validators = new Set<string>(["IsEmail", "IsString", "MaxLength", "MinLength"]);
-  const swagger = new Set<string>(["ApiProperty", "ApiPropertyOptional"]);
+  const swagger = new Set<string>(["ApiProperty"]);
   const extra: string[] = [];
 
   for (const field of extraFields) {
@@ -422,7 +447,7 @@ function dtoFile(config: AuthConfig, user: NormalizedEntity): string {
       .map((field) => names.enumType(user.name, field.name)),
   ].sort();
 
-  return `import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+  return `import { ${[...swagger].sort().join(", ")} } from '@nestjs/swagger';
 import { ${[...validators].sort().join(", ")} } from 'class-validator';
 import type { ${prismaTypes.join(", ")} } from '@prisma/client';
 
@@ -517,10 +542,49 @@ ${responseMappings}
 `;
 }
 
-function authService(config: AuthConfig, user: NormalizedEntity): string {
+function hasNotificationEvent(context: TargetRenderContext, event: string): boolean {
+  const notifications = context.featureConfig("notifications");
+  const events = notifications?.events;
+  return Array.isArray(events) && events.includes(event);
+}
+
+function authService(
+  config: AuthConfig,
+  user: NormalizedEntity,
+  context: TargetRenderContext,
+): string {
   const model = names.model(user.name);
   const delegate = names.delegate(user.name);
   const extraFields = writableFields(user).filter((field) => field.name !== "email");
+  const durableRegistrationNotification = hasNotificationEvent(context, "user_registered");
+  const activeAccountFilter = user.softDelete ? ", deletedAt: null" : "";
+  const activeTokenOwnerFilter = user.softDelete ? ", user: { deletedAt: null }" : "";
+  const verificationAccountUpdate = user.softDelete
+    ? `      const updated = await tx.${delegate}.updateMany({
+        where: { id: record.userId, deletedAt: null },
+        data: { emailVerifiedAt: now },
+      });
+
+      if (updated.count !== 1) {
+        throw new BadRequestException('Invalid or expired verification token');
+      }`
+    : `      await tx.${delegate}.update({
+        where: { id: record.userId },
+        data: { emailVerifiedAt: now },
+      });`;
+  const passwordAccountUpdate = user.softDelete
+    ? `      const updated = await tx.${delegate}.updateMany({
+        where: { id: record.userId, deletedAt: null },
+        data: { passwordHash },
+      });
+
+      if (updated.count !== 1) {
+        throw new BadRequestException('Invalid or expired reset token');
+      }`
+    : `      await tx.${delegate}.update({
+        where: { id: record.userId },
+        data: { passwordHash },
+      });`;
 
   const createFields = extraFields
     .map((field) =>
@@ -534,7 +598,9 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
     ? `
   /** Issues a single-use verification token and publishes it for delivery. */
   async requestEmailVerification(userId: string): Promise<void> {
-    const account = await this.prisma.${delegate}.findUnique({ where: { id: userId } });
+    const account = await this.prisma.${delegate}.findFirst({
+      where: { id: userId${activeAccountFilter} },
+    });
 
     if (account === null) {
       throw new UnauthorizedException('Account no longer exists');
@@ -555,7 +621,7 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
       });
     });
 
-    this.events.emit('user.email_verification_requested', {
+    await this.events.emitAsync('user.email_verification_requested', {
       userId,
       email: account.email,
       token,
@@ -563,8 +629,8 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
   }
 
   async verifyEmail(token: string): Promise<void> {
-    const record = await this.prisma.emailVerificationToken.findUnique({
-      where: { tokenHash: digestToken(token) },
+    const record = await this.prisma.emailVerificationToken.findFirst({
+      where: { tokenHash: digestToken(token)${activeTokenOwnerFilter} },
     });
 
     if (record === null || record.consumedAt !== null || record.expiresAt <= new Date()) {
@@ -582,10 +648,7 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
         return false;
       }
 
-      await tx.${delegate}.update({
-        where: { id: record.userId },
-        data: { emailVerifiedAt: now },
-      });
+${verificationAccountUpdate}
       return true;
     });
 
@@ -603,39 +666,51 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
    * cannot be used to enumerate accounts.
    */
   async requestPasswordReset(email: string): Promise<void> {
-    const account = await this.prisma.${delegate}.findUnique({
-      where: { email: normalizeEmail(email) },
-    });
+    const startedAt = Date.now();
 
-    if (account === null) {
-      return;
+    try {
+      const account = await this.prisma.${delegate}.findFirst({
+        where: { email: normalizeEmail(email)${activeAccountFilter} },
+      });
+      // Do the same token-generation work for both branches. The fixed response
+      // floor below masks the remaining database-write difference in the normal
+      // case, while the endpoint's throttling bounds repeated measurements.
+      const token = createOpaqueToken();
+      const tokenHash = digestToken(token);
+
+      if (account !== null) {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.passwordResetToken.deleteMany({
+            where: { userId: account.id, consumedAt: null },
+          });
+          await tx.passwordResetToken.create({
+            data: {
+              tokenHash,
+              userId: account.id,
+              expiresAt: new Date(Date.now() + RESET_TTL_MS),
+            },
+          });
+        });
+
+        // Delivery runs asynchronously so transport latency cannot reveal
+        // whether the address exists. The token can be requested again after a
+        // crash or terminal provider failure.
+        void this.events
+          .emitAsync('user.password_reset_requested', {
+            userId: account.id,
+            email: account.email,
+            token,
+          })
+          .catch(() => undefined);
+      }
+    } finally {
+      await enforceRecoveryResponseFloor(startedAt);
     }
-
-    const token = createOpaqueToken();
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.passwordResetToken.deleteMany({
-        where: { userId: account.id, consumedAt: null },
-      });
-      await tx.passwordResetToken.create({
-        data: {
-          tokenHash: digestToken(token),
-          userId: account.id,
-          expiresAt: new Date(Date.now() + RESET_TTL_MS),
-        },
-      });
-    });
-
-    this.events.emit('user.password_reset_requested', {
-      userId: account.id,
-      email: account.email,
-      token,
-    });
   }
 
   async resetPassword(token: string, password: string): Promise<void> {
-    const record = await this.prisma.passwordResetToken.findUnique({
-      where: { tokenHash: digestToken(token) },
+    const record = await this.prisma.passwordResetToken.findFirst({
+      where: { tokenHash: digestToken(token)${activeTokenOwnerFilter} },
     });
 
     if (record === null || record.consumedAt !== null || record.expiresAt <= new Date()) {
@@ -654,36 +729,105 @@ function authService(config: AuthConfig, user: NormalizedEntity): string {
         return false;
       }
 
-      await tx.${delegate}.update({
-        where: { id: record.userId },
-        data: { passwordHash },
-      });
+${passwordAccountUpdate}
+
+      // Token consumption, password replacement, and old-session revocation
+      // are one state transition. A failure rolls all three back.
+      await this.tokens.revokeAllSessions(record.userId, tx);
       return true;
     });
 
     if (!consumed) {
       throw new BadRequestException('Invalid or expired reset token');
     }
-
-    // A password change invalidates every existing session.
-    await this.tokens.revokeAllSessions(record.userId);
   }
 `
     : "";
 
+  const recoveryHashImport = config.emailVerification || config.passwordReset
+    ? "import { createOpaqueToken, digestToken } from './hash';\n"
+    : "";
+
+  const verificationTokenSetup = config.emailVerification
+    ? "    const verificationToken = createOpaqueToken();\n"
+    : "";
+
+  const verificationTokenWrite = config.emailVerification
+    ? `
+        await tx.emailVerificationToken.create({
+          data: {
+            tokenHash: digestToken(verificationToken),
+            userId: account.id,
+            expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
+          },
+        });
+`
+    : "";
+
   const registerVerification = config.emailVerification
-    ? "\n    await this.requestEmailVerification(account.id);\n"
+    ? `
+    try {
+      await this.events.emitAsync('user.email_verification_requested', {
+        userId: account.id,
+        email: account.email,
+        token: verificationToken,
+      });
+    } catch {
+      // Registration is already committed. Returning its token pair keeps the
+      // account usable; the authenticated resend endpoint can issue a fresh
+      // verification token after a transient provider failure.
+    }
+`
+    : "";
+
+  const outboxImport = durableRegistrationNotification
+    ? "import { enqueueNotification } from '../notifications/outbox';\n"
+    : "";
+
+  const registrationOutboxWrite = durableRegistrationNotification
+    ? `
+        await enqueueNotification(tx, 'user.registered', { userId: account.id });
+`
+    : "";
+
+  const ttlConstants = [
+    ...(config.emailVerification
+      ? ["const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;"]
+      : []),
+    ...(config.passwordReset
+      ? [
+          "const RESET_TTL_MS = 60 * 60 * 1000;",
+          "const RECOVERY_RESPONSE_FLOOR_MS = 250;",
+        ]
+      : []),
+  ].join("\n");
+
+  const recoveryFloorHelpers = config.passwordReset
+    ? `
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function enforceRecoveryResponseFloor(startedAt: number): Promise<void> {
+  const remaining = RECOVERY_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+  if (remaining > 0) {
+    await wait(remaining);
+  }
+}
+`
+    : "";
+  const badRequestImport = config.emailVerification || config.passwordReset
+    ? "  BadRequestException,\n"
     : "";
 
   return `import {
-  BadRequestException,
-  ConflictException,
+${badRequestImport}  ConflictException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type { ${model} } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
+import { Prisma, type ${model} } from '@prisma/client';
+${outboxImport}import { PrismaService } from '../prisma/prisma.service';
 import {
   AccountDto,
   AuthResponseDto,
@@ -691,15 +835,18 @@ import {
   RegisterDto,
   toAccount,
 } from './dto/auth.dto';
-import { createOpaqueToken, digestToken } from './hash';
-import { PasswordService } from './password.service';
+${recoveryHashImport}import { PasswordService } from './password.service';
 import { TokenPair, TokenService } from './token.service';
 
-const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
-const RESET_TTL_MS = 60 * 60 * 1000;
+${ttlConstants}
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+${recoveryFloorHelpers}
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 @Injectable()
@@ -719,23 +866,40 @@ export class AuthService {
       throw new ConflictException('An account with this email already exists');
     }
 
-    const account = await this.prisma.${delegate}.create({
-      data: {
-        email,
-        passwordHash: await this.passwords.hash(dto.password),
+    const passwordHash = await this.passwords.hash(dto.password);
+${verificationTokenSetup}    let result: { account: ${model}; pair: TokenPair };
+
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        const account = await tx.${delegate}.create({
+          data: {
+            email,
+            passwordHash,
 ${createFields}
-      },
-    });
+          },
+        });
+${verificationTokenWrite}        const pair = await this.tokens.issue(account, tx);
+${registrationOutboxWrite}        return { account, pair };
+      });
+    } catch (error) {
+      // The pre-check gives a friendly fast path; this handles a concurrent
+      // registration that wins between the check and transaction commit.
+      if (isUniqueViolation(error)) {
+        throw new ConflictException('An account with this email already exists');
+      }
+      throw error;
+    }
+
+    const { account, pair } = result;
 
     this.events.emit('user.registered', { userId: account.id, email: account.email });
 ${registerVerification}
-    const pair = await this.tokens.issue(account);
     return this.toResponse(account, pair);
   }
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
-    const account = await this.prisma.${delegate}.findUnique({
-      where: { email: normalizeEmail(dto.email) },
+    const account = await this.prisma.${delegate}.findFirst({
+      where: { email: normalizeEmail(dto.email)${activeAccountFilter} },
     });
     const valid = await this.passwords.verify(dto.password, account?.passwordHash ?? null);
 
@@ -756,7 +920,9 @@ ${registerVerification}
   }
 
   async me(userId: string): Promise<AccountDto> {
-    const account = await this.prisma.${delegate}.findUnique({ where: { id: userId } });
+    const account = await this.prisma.${delegate}.findFirst({
+      where: { id: userId${activeAccountFilter} },
+    });
 
     if (account === null) {
       throw new UnauthorizedException('Account no longer exists');
@@ -822,11 +988,13 @@ function authController(config: AuthConfig): string {
     ? "\n  RequestPasswordResetDto,\n  ResetPasswordDto,"
     : "";
   const verificationImports = config.emailVerification ? "\n  TokenDto," : "";
+  const acceptedResponseImport = config.emailVerification || config.passwordReset
+    ? "  ApiAcceptedResponse,\n"
+    : "";
 
   return `import { Body, Controller, Get, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
 import {
-  ApiAcceptedResponse,
-  ApiBearerAuth,
+${acceptedResponseImport}  ApiBearerAuth,
   ApiCreatedResponse,
   ApiNoContentResponse,
   ApiOkResponse,
@@ -849,6 +1017,11 @@ import {
 import { AuthenticatedUser } from './jwt.strategy';
 import { TokenPair } from './token.service';
 
+// Integration suites share one loopback address and intentionally exercise
+// every auth flow. Keep production/development on the configured policy while
+// preventing test order from turning valid requests into unrelated 429s.
+const AUTH_RATE_LIMIT = process.env.NODE_ENV === 'test' ? 10_000 : ${config.rateLimit.limit};
+
 /**
  * Every route here is rate limited: ${config.rateLimit.limit} requests per
  * ${config.rateLimit.ttlSeconds} seconds per client.
@@ -856,7 +1029,7 @@ import { TokenPair } from './token.service';
 @ApiTags('auth')
 @ApiTooManyRequestsResponse({ type: ApiErrorDto })
 @UseGuards(ThrottlerGuard)
-@Throttle({ default: { limit: ${config.rateLimit.limit}, ttl: ${config.rateLimit.ttlSeconds * 1000} } })
+@Throttle({ default: { limit: AUTH_RATE_LIMIT, ttl: ${config.rateLimit.ttlSeconds * 1000} } })
 @Controller('auth')
 export class AuthController {
   constructor(private readonly service: AuthService) {}
@@ -950,16 +1123,32 @@ import { TokenService } from './token.service';
 
 describe('AuthService', () => {
   const accounts = {
+    findFirst: jest.fn(),
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
   };
 
   const prisma = {
     ${delegate}: accounts,
-    emailVerificationToken: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
-    passwordResetToken: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
-    $transaction: jest.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+    emailVerificationToken: {
+      create: jest.fn(),
+      deleteMany: jest.fn(),
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    passwordResetToken: {
+      create: jest.fn(),
+      deleteMany: jest.fn(),
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    refreshSession: { create: jest.fn(), updateMany: jest.fn() },
+    notificationOutbox: { create: jest.fn() },
+    $transaction: jest.fn(),
   };
 
   const passwords = { hash: jest.fn(), verify: jest.fn() };
@@ -974,6 +1163,10 @@ describe('AuthService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.$transaction.mockImplementation(
+      async (operation: (tx: never) => Promise<unknown>): Promise<unknown> =>
+        operation(prisma as never),
+    );
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -981,7 +1174,7 @@ describe('AuthService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: PasswordService, useValue: passwords },
         { provide: TokenService, useValue: tokens },
-        { provide: EventEmitter2, useValue: { emit: jest.fn() } },
+        { provide: EventEmitter2, useValue: { emit: jest.fn(), emitAsync: jest.fn() } },
       ],
     }).compile();
 
@@ -997,7 +1190,7 @@ describe('AuthService', () => {
   });
 
   it('rejects a login with an unknown email without revealing that it is unknown', async () => {
-    accounts.findUnique.mockResolvedValue(null);
+    accounts.findFirst.mockResolvedValue(null);
     passwords.verify.mockResolvedValue(false);
 
     await expect(
@@ -1009,7 +1202,7 @@ describe('AuthService', () => {
   });
 
   it('rejects a login with a wrong password', async () => {
-    accounts.findUnique.mockResolvedValue({ id: 'u1', email: 'a@example.test', passwordHash: 'hash' });
+    accounts.findFirst.mockResolvedValue({ id: 'u1', email: 'a@example.test', passwordHash: 'hash' });
     passwords.verify.mockResolvedValue(false);
 
     await expect(
@@ -1108,10 +1301,171 @@ export async function authHeaders(
 
 function authE2e(config: AuthConfig, context: TargetRenderContext): string {
   const prefix = context.settings.apiPrefix;
+  const user = context.entity(config.userEntity);
+  const userDelegate = names.delegate(user.name);
+  const recoveryEnabled =
+    context.hasFeature("notifications") && (config.emailVerification || config.passwordReset);
+  const notificationImports = recoveryEnabled
+    ? `import { NOTIFICATION_PROVIDER, type NotificationMessage } from '../src/generated/notifications/notification-provider';
+import { MockNotificationProvider } from '../src/generated/notifications/providers/mock.provider';
+`
+    : "";
+  const notificationHelpers = recoveryEnabled
+    ? `
+  let notifications: MockNotificationProvider;
+
+  async function waitForMessage(subject: string): Promise<NotificationMessage> {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const message = notifications.sent.find((candidate) => candidate.subject.includes(subject));
+      if (message !== undefined) {
+        return message;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(\`Timed out waiting for notification with subject "\${subject}"\`);
+  }
+
+  function recoveryToken(message: NotificationMessage): string {
+    const token = /[?&]token=([A-Za-z0-9_-]+)/.exec(message.text)?.[1];
+    if (token === undefined) {
+      throw new Error('Recovery notification did not contain a token link');
+    }
+    return token;
+  }
+`
+    : "";
+  const notificationAfterBootstrap = recoveryEnabled
+    ? "    notifications = app.get<MockNotificationProvider>(NOTIFICATION_PROVIDER);\n"
+    : "";
+  const notificationReset = recoveryEnabled ? "    notifications.sent.length = 0;\n" : "";
+
+  const verificationTest = config.emailVerification && recoveryEnabled
+    ? `
+  it('delivers and consumes an email-verification token', async () => {
+    const account = await registerAccount(app, prisma);
+    const message = await waitForMessage('Verify');
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/verify-email')
+      .send({ token: recoveryToken(message) })
+      .expect(204);
+
+    const me = await request(app.getHttpServer())
+      .get('/${prefix}/auth/me')
+      .set('Authorization', \`Bearer \${account.accessToken}\`)
+      .expect(200);
+
+    expect(typeof me.body.emailVerifiedAt).toBe('string');
+
+    // Single-use means a replay is rejected.
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/verify-email')
+      .send({ token: recoveryToken(message) })
+      .expect(400);
+  });
+`
+    : "";
+
+  const resetTest = config.passwordReset && recoveryEnabled
+    ? `
+  it('delivers a reset token, replaces the password and revokes old sessions', async () => {
+    const account = await registerAccount(app, prisma);
+    notifications.sent.length = 0;
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/request-password-reset')
+      .send({ email: account.email })
+      .expect(202);
+
+    const message = await waitForMessage('Reset');
+    const replacementPassword = \`replacement-\${TEST_PASSWORD}\`;
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/reset-password')
+      .send({ token: recoveryToken(message), password: replacementPassword })
+      .expect(204);
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/refresh')
+      .send({ refreshToken: account.refreshToken })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/login')
+      .send({ email: account.email, password: account.password })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/login')
+      .send({ email: account.email, password: replacementPassword })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/reset-password')
+      .send({ token: recoveryToken(message), password: replacementPassword })
+      .expect(400);
+  });
+
+  it('returns the same accepted response for an unknown reset address', async () => {
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/request-password-reset')
+      .send({ email: 'missing@example.test' })
+      .expect(202);
+
+    expect(notifications.sent).toHaveLength(0);
+  });
+`
+    : "";
+
+  const deletedResetAssertion = config.passwordReset
+    ? `
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/request-password-reset')
+      .send({ email: account.email })
+      .expect(202);
+
+    expect(
+      await prisma.passwordResetToken.count({ where: { userId: account.id } }),
+    ).toBe(0);
+`
+    : "";
+  const softDeleteTest = user.softDelete
+    ? `
+  it('rejects every authentication path for a soft-deleted account', async () => {
+    const account = await registerAccount(app, prisma);
+
+    await prisma.${userDelegate}.update({
+      where: { id: account.id },
+      data: { deletedAt: new Date() },
+    });
+
+    await request(app.getHttpServer())
+      .get('/${prefix}/auth/me')
+      .set('Authorization', \`Bearer \${account.accessToken}\`)
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/login')
+      .send({ email: account.email, password: account.password })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/${prefix}/auth/refresh')
+      .send({ refreshToken: account.refreshToken })
+      .expect(401);
+
+    expect(
+      await prisma.refreshSession.count({
+        where: { userId: account.id, revokedAt: null },
+      }),
+    ).toBe(0);
+${deletedResetAssertion}  });
+`
+    : "";
 
   return `import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { PrismaService } from '../src/generated/prisma/prisma.service';
+${notificationImports}import { PrismaService } from '../src/generated/prisma/prisma.service';
 import { registerAccount, TEST_PASSWORD } from './utils/auth-helper';
 import { resetDatabase } from './utils/reset';
 import { createTestApp } from './utils/test-app';
@@ -1119,10 +1473,11 @@ import { createTestApp } from './utils/test-app';
 describe('Authentication (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+${notificationHelpers}
 
   beforeAll(async () => {
     ({ app, prisma } = await createTestApp());
-  });
+${notificationAfterBootstrap}  });
 
   afterAll(async () => {
     await app.close();
@@ -1130,7 +1485,7 @@ describe('Authentication (e2e)', () => {
 
   beforeEach(async () => {
     await resetDatabase(prisma);
-  });
+${notificationReset}  });
 
   it('registers, logs in and returns the authenticated account', async () => {
     const account = await registerAccount(app, prisma);
@@ -1204,7 +1559,7 @@ describe('Authentication (e2e)', () => {
     expect(stored?.passwordHash).toBeDefined();
     expect(stored?.passwordHash).not.toBe(TEST_PASSWORD);
   });
-});
+${verificationTest}${resetTest}${softDeleteTest}});
 `;
 }
 
@@ -1224,7 +1579,7 @@ export const authRenderer: FeatureTargetRenderer = {
       file("src/generated/auth/decorators/roles.decorator.ts", ROLES_DECORATOR),
       file("src/generated/auth/decorators/current-user.decorator.ts", CURRENT_USER_DECORATOR),
       file("src/generated/auth/dto/auth.dto.ts", dtoFile(config, user)),
-      file("src/generated/auth/auth.service.ts", authService(config, user)),
+      file("src/generated/auth/auth.service.ts", authService(config, user, context)),
       file("src/generated/auth/auth.controller.ts", authController(config)),
       file("src/generated/auth/auth.module.ts", authModule(config)),
       file("src/generated/auth/auth.service.spec.ts", authServiceSpec(user)),

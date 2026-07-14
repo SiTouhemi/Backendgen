@@ -36,7 +36,11 @@ entities:
 features:
   crud:
     ownedBy: { Note: User }
-    softDelete: [Note]
+    # Custom/admin code can deactivate accounts by setting User.deletedAt;
+    # every generated authentication path then rejects that account.
+    softDelete: [Note, User]
 
   auth:
     roles: [admin, member]
+    emailVerification: false
+    passwordReset: false

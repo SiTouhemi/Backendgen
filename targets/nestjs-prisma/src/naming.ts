@@ -1,5 +1,46 @@
+import { createHash } from "node:crypto";
 import { camelCase, kebabCase, pascalCase, pluralize } from "@backend-compiler/common";
 import type { NormalizedEntity, NormalizedField } from "@backend-compiler/compiler";
+
+export const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
+
+function utf8Prefix(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > maxBytes) break;
+    result += character;
+    bytes += characterBytes;
+  }
+
+  return result;
+}
+
+/**
+ * PostgreSQL truncates identifiers after 63 bytes, which can make two distinct
+ * generated names collide. Preserve short names verbatim; long names receive a
+ * stable SHA-256 suffix while remaining within PostgreSQL's byte limit.
+ */
+export function postgresIdentifier(value: string): string {
+  if (Buffer.byteLength(value, "utf8") <= POSTGRES_IDENTIFIER_MAX_BYTES) {
+    return value;
+  }
+
+  const digest = createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12);
+  const prefixBytes = POSTGRES_IDENTIFIER_MAX_BYTES - Buffer.byteLength(digest, "utf8") - 1;
+  return `${utf8Prefix(value, prefixBytes)}_${digest}`;
+}
+
+/** Database object names shared by Prisma attributes and the handwritten DDL. */
+export const databaseNames = {
+  primaryKey: (entity: string): string => postgresIdentifier(`${entity}_pkey`),
+  index: (entity: string, fields: readonly string[], unique: boolean): string =>
+    postgresIdentifier(`${entity}_${fields.join("_")}_${unique ? "key" : "idx"}`),
+  foreignKey: (entity: string, field: string): string =>
+    postgresIdentifier(`${entity}_${field}_fkey`),
+};
 
 /**
  * Naming rules shared by the target and by every feature renderer that targets
@@ -114,6 +155,82 @@ export function foreignKeys(
       required: relation.required,
       unique: relation.unique,
     }));
+}
+
+/**
+ * Non-unique indexes derived from the entity's access paths, shared by the
+ * Prisma schema and the initial migration so both always agree.
+ *
+ * Every owning foreign key gets an index (PostgreSQL does not index foreign
+ * keys automatically) unless it is unique or an explicit index covers the
+ * required leading columns. The tenant key gets a composite with `createdAt`
+ * and the stable `id` tie-breaker used by generated list queries.
+ */
+export function derivedIndexes(entity: NormalizedEntity): Array<{ fields: string[] }> {
+  const available = entity.indexes.map((index) => [...index.fields]);
+  const derived: Array<{ fields: string[] }> = [];
+
+  const isCovered = (required: readonly string[]): boolean =>
+    available.some(
+      (fields) =>
+        fields.length >= required.length &&
+        required.every((field, position) => fields[position] === field),
+    );
+
+  for (const relation of entity.relations) {
+    const key = relation.foreignKey;
+    if (!relation.owner || key === null || relation.unique) {
+      continue;
+    }
+
+    const fields =
+      key === entity.tenant?.foreignKey ? [key, "createdAt", "id"] : [key];
+    if (isCovered(fields)) continue;
+
+    available.push(fields);
+    derived.push({ fields });
+  }
+
+  return derived;
+}
+
+export interface StandaloneIndex {
+  fields: string[];
+  unique: boolean;
+}
+
+function indexSignature(fields: readonly string[], unique: boolean): string {
+  return JSON.stringify([unique, fields]);
+}
+
+/**
+ * Model-level indexes left after field/relation `@unique` attributes are
+ * accounted for. Keeping this list in one helper makes Prisma and the initial
+ * SQL migration de-duplicate the same declarations in the same order.
+ */
+export function standaloneIndexes(entity: NormalizedEntity): StandaloneIndex[] {
+  const seen = new Set<string>();
+  const result: StandaloneIndex[] = [];
+
+  for (const field of entity.fields) {
+    if (field.unique) seen.add(indexSignature([field.name], true));
+  }
+  for (const key of foreignKeys(entity)) {
+    if (key.unique) seen.add(indexSignature([key.name], true));
+  }
+
+  const add = (fields: readonly string[], unique: boolean): void => {
+    const signature = indexSignature(fields, unique);
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    result.push({ fields: [...fields], unique });
+  };
+
+  for (const index of entity.indexes) add(index.fields, index.unique);
+  for (const index of derivedIndexes(entity)) add(index.fields, false);
+  if (entity.softDelete) add(["deletedAt"], false);
+
+  return result;
 }
 
 export function enumFields(

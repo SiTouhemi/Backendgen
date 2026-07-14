@@ -43,6 +43,40 @@ export class CustomModule {}
 
 Because the policy lives in `src/custom/`, regeneration never conflicts with it, and because the generated service resolves the token, your rules run inside compiler-owned request handling.
 
+## Custom notification transport
+
+Set `features.notifications.provider: custom`, implement the generated `NotificationProvider` interface under `src/custom/`, and export it from `CustomModule`:
+
+```ts
+import { Module } from '@nestjs/common';
+import {
+  CUSTOM_NOTIFICATION_PROVIDER,
+  type DeliveryResult,
+  type NotificationMessage,
+  type NotificationProvider,
+} from '../generated/notifications/notification-provider';
+
+class CompanyMailProvider implements NotificationProvider {
+  readonly id = 'company-mail';
+
+  async send(message: NotificationMessage): Promise<DeliveryResult> {
+    const messageId = await companyMail.send(message); // your SDK/client
+    return { providerId: this.id, messageId };
+  }
+}
+
+@Module({
+  providers: [
+    CompanyMailProvider,
+    { provide: CUSTOM_NOTIFICATION_PROVIDER, useExisting: CompanyMailProvider },
+  ],
+  exports: [CUSTOM_NOTIFICATION_PROVIDER],
+})
+export class CustomModule {}
+```
+
+Durable outbox delivery is at least once: a worker can crash after the provider accepts a message but before the database records success. Pass a stable provider-side idempotency key when your transport supports one. Never log recovery URLs, raw tokens, recipients, or message bodies. A missing custom provider fails application startup instead of silently falling back to the non-delivering log sink.
+
 Every generation report lists the customization points for your specification. The MCP tool `explain_customization_points` returns the exact paths, interfaces, and events without returning file contents.
 
 ## Safe regeneration workflow

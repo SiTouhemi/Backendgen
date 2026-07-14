@@ -68,10 +68,11 @@ function appModule(contributions: RenderResult): string {
     ...guards.map((entry) => `{ provide: APP_GUARD, useClass: ${entry.symbol} }`),
     ...providers.map((entry) => entry.symbol),
   ];
+  const coreProviders = ["APP_FILTER", ...(guards.length > 0 ? ["APP_GUARD"] : [])].join(", ");
 
   return `import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { ${coreProviders} } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { CustomModule } from './custom/custom.module';
 import { HttpExceptionFilter } from './generated/common/http-exception.filter';

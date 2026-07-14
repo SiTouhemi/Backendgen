@@ -32,6 +32,8 @@ features:
 
   auth:
     roles: [admin, patient]
+    emailVerification: false
+    passwordReset: false
 
   reservations:
     entity: Appointment

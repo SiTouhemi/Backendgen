@@ -109,8 +109,11 @@ export class OrganizationContextGuard implements CanActivate {
     });
 
     if (memberships.length === 1) {
-      user.organizationId = memberships[0].organizationId;
-      user.organizationRole = memberships[0].role;
+      const membership = memberships[0];
+      if (membership !== undefined) {
+        user.organizationId = membership.organizationId;
+        user.organizationRole = membership.role;
+      }
     }
 
     return true;
@@ -145,7 +148,7 @@ export class OrganizationRolesGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    if (required === undefined || required.length === 0) {
+    if (required === undefined) {
       return true;
     }
 
@@ -917,6 +920,13 @@ export const organizationsRenderer: FeatureTargetRenderer = {
           kind: "global-guard",
           // After JwtAuthGuard (10) so that request.user exists, before RolesGuard (20).
           order: 15,
+        },
+        {
+          symbol: "OrganizationRolesGuard",
+          from: "./generated/organizations/guards/organization-roles.guard",
+          kind: "global-guard",
+          // After the context guard so the caller's organization role is resolved.
+          order: 16,
         },
       ],
     };
