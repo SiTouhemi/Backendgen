@@ -1,0 +1,42 @@
+# CRUD plus email/password authentication. Notes are owned per row: a member
+# sees and edits only their own notes; admins see everything.
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: auth-api
+  description: Accounts, roles and per-row ownership
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  # The auth feature extends this entity with email, passwordHash, role and
+  # emailVerifiedAt, and removes it from the generic CRUD surface.
+  User:
+    fields:
+      displayName:
+        type: string
+        required: true
+        minLength: 2
+        maxLength: 100
+
+  Note:
+    fields:
+      title:
+        type: string
+        required: true
+        minLength: 1
+        maxLength: 200
+      body: text
+      pinned:
+        type: boolean
+        default: false
+
+features:
+  crud:
+    ownedBy: { Note: User }
+    softDelete: [Note]
+
+  auth:
+    roles: [admin, member]

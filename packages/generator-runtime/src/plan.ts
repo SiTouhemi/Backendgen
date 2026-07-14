@@ -138,11 +138,24 @@ export async function planGeneration(input: {
       continue;
     }
 
-    planned.push({
-      path: file.path,
-      action: currentHash === hashContents(file.contents) ? "unchanged" : "update",
-      ownership: file.ownership,
-    });
+    const action: FileAction =
+      currentHash === hashContents(file.contents) ? "unchanged" : "update";
+
+    // Rewriting a migration in place is safe only while it has never been
+    // applied. Once `prisma migrate deploy` has run against a database, the
+    // rewritten file no longer matches the recorded checksum and deployment
+    // breaks — or worse, drifts. The compiler cannot see the database, so it
+    // warns instead of refusing; docs/MIGRATIONS.md describes both workflows.
+    if (action === "update" && file.path.startsWith("prisma/migrations/")) {
+      warnings.push(
+        `Migration ${file.path} changed because the specification changed. ` +
+          "If this migration was already applied to a database, do NOT deploy the rewritten file: " +
+          "reset development databases with `prisma migrate reset`, or create an incremental " +
+          "migration for production (see docs/MIGRATIONS.md in the compiler repository).",
+      );
+    }
+
+    planned.push({ path: file.path, action, ownership: file.ownership });
   }
 
   // Files the previous generation produced but this one does not.

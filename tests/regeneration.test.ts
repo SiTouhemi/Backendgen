@@ -141,6 +141,38 @@ describe("safe regeneration", () => {
     await expect(readFile(customPath, "utf8")).resolves.toBe("// mine\n");
   });
 
+  it("warns when a schema change rewrites the existing migration", async () => {
+    await generate();
+
+    const spec = scenarioSpec("basic-crud");
+    spec.entities.Note!.fields.priority = { type: "integer", minimum: 0 };
+
+    const second = await generateBackend({ spec, outputDirectory: output });
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+
+    expect(second.report.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("Migration prisma/migrations/")]),
+    );
+  });
+
+  it("warns when the manifest exists but is corrupt", async () => {
+    await generate();
+
+    const manifestPath = join(output, ".backendgen/manifest.json");
+    await writeFile(manifestPath, "{ not json", "utf8");
+
+    const preview = await generate({ dryRun: true });
+
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+
+    expect(preview.report.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("not a valid generation manifest")]),
+    );
+  });
+
   it("removes a file that is no longer generated", async () => {
     await generateBackend({
       spec: scenarioSpec("basic-crud"),

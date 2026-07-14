@@ -20,6 +20,17 @@ npm run generate:example
 node apps/cli/dist/src/index.js test-generated --output generated/hotel-api --install
 ```
 
+`test-generated` forwards `DATABASE_URL` into the generated project; export it first (Prisma needs it even to validate the schema — a placeholder PostgreSQL URL is enough for the unit suite).
+
+Or start from scratch:
+
+```sh
+node apps/cli/dist/src/index.js init backend.yaml --name my-api
+node apps/cli/dist/src/index.js generate backend.yaml --output ./my-api
+```
+
+See [examples/](examples/README.md) for a complete specification per feature combination.
+
 Use the built CLI directly when passing absolute paths; some npm 11 versions consume `--output` before forwarding arguments.
 
 ```sh
@@ -42,6 +53,8 @@ For PostgreSQL-backed E2E, export `DATABASE_URL` and `BACKENDGEN_E2E_BUILD=1`. C
 
 Generated files and user code are separated. Files marked `generated` in `.backendgen/manifest.json` are compiler-owned. Files marked `custom-scaffold` are written once and never overwritten. Generation refuses to replace locally modified generated files unless `--force` is explicit.
 
-Start with [the architecture](docs/ARCHITECTURE.md), [specification](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), [threat model](docs/THREAT_MODEL.md), and [latest generated-code security review](docs/SECURITY_REVIEW_2026-07-14.md).
+Regenerating after an entity change rewrites the initial migration; read [migrations and schema evolution](docs/MIGRATIONS.md) before deploying over an applied migration.
+
+Start with [the architecture](docs/ARCHITECTURE.md), [specification reference](docs/SPECIFICATION.md), [feature packs](docs/FEATURE_PACKS.md), [customization](docs/CUSTOMIZATION.md), [migrations](docs/MIGRATIONS.md), [target adapters](docs/TARGET_ADAPTERS.md), [MCP setup](docs/MCP.md), [threat model](docs/THREAT_MODEL.md), and [latest generated-code security review](docs/SECURITY_REVIEW_2026-07-14.md).
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

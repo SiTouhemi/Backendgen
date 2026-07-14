@@ -27,6 +27,20 @@ function schemaIssue(error: ErrorObject): ValidationIssue {
   };
 }
 
+/** Mirrors `camelCase` in @backend-compiler/common, which derives foreign-key names. */
+function camelCaseIdentifier(value: string): string {
+  const parts = value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter((part) => part.length > 0)
+    .map((part) => part.toLowerCase());
+
+  return parts
+    .map((part, index) => (index === 0 ? part : part[0]!.toUpperCase() + part.slice(1)))
+    .join("");
+}
+
 function fieldOptions(field: string | FieldOptions): FieldOptions {
   return typeof field === "string" ? { type: field as FieldOptions["type"] } : field;
 }
@@ -77,9 +91,15 @@ function validateEntitySemantics(
     }
   }
 
+  // The compiler materializes a foreign-key column for each declared relation,
+  // and indexes may reference it. Accept here what the compiler accepts.
+  const relationForeignKeys = new Set(
+    (entity.relations ?? []).map((relation) => `${camelCaseIdentifier(relation.name)}Id`),
+  );
+
   for (const [indexPosition, index] of (entity.indexes ?? []).entries()) {
     for (const fieldName of index.fields) {
-      if (!(fieldName in entity.fields)) {
+      if (!(fieldName in entity.fields) && !relationForeignKeys.has(fieldName)) {
         issues.push({
           code: "semantic.unknown-index-field",
           path: `/entities/${name}/indexes/${indexPosition}/fields`,
@@ -110,12 +130,15 @@ function validateFeatureSemantics(spec: BackendSpec): ValidationIssue[] {
     }
   }
 
+  // 0 is meaningful: it disables holds and confirms immediately. The feature's
+  // own schema enforces the full range; only clearly nonsensical values are
+  // rejected this early.
   const holdMinutes = reservations.holdMinutes;
-  if (holdMinutes !== undefined && (typeof holdMinutes !== "number" || holdMinutes <= 0)) {
+  if (holdMinutes !== undefined && (typeof holdMinutes !== "number" || holdMinutes < 0)) {
     issues.push({
       code: "semantic.invalid-hold-duration",
       path: "/features/reservations/holdMinutes",
-      message: "holdMinutes must be a positive number",
+      message: "holdMinutes must be zero or a positive number",
     });
   }
 

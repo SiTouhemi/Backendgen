@@ -1,0 +1,59 @@
+# Multi-tenant SaaS: organizations, memberships and server-side tenant
+# isolation. Projects and tasks are scoped per organization; users are not,
+# because one account can join several tenants.
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: saas-api
+  description: Multi-tenant projects and tasks
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  User:
+    fields:
+      displayName:
+        type: string
+        required: true
+        minLength: 2
+        maxLength: 100
+
+  Project:
+    fields:
+      name:
+        type: string
+        required: true
+        minLength: 1
+        maxLength: 120
+      status:
+        type: string
+        enum: [ACTIVE, ARCHIVED]
+        default: ACTIVE
+        required: true
+
+  Task:
+    fields:
+      title:
+        type: string
+        required: true
+        maxLength: 200
+      done:
+        type: boolean
+        default: false
+        required: true
+    relations:
+      - name: project
+        type: belongsTo
+        target: Project
+        required: true
+
+features:
+  crud: {}
+
+  auth:
+    roles: [admin, member]
+
+  organizations:
+    roles: [owner, admin, member]

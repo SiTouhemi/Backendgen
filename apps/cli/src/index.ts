@@ -8,6 +8,7 @@ import {
   runGeneratedTests,
 } from "@backend-compiler/generator-runtime";
 import { loadSpecFile, validateSpec, type BackendSpec } from "@backend-compiler/specification";
+import { access, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   formatFeature,
@@ -22,6 +23,7 @@ import {
 const HELP = `backendgen — deterministic backend feature compiler
 
 Usage:
+  backendgen init [path] [--name <project-name>]
   backendgen list-targets [--json]
   backendgen describe-target <target-id> [--json]
   backendgen list-features [--json]
@@ -93,6 +95,44 @@ function write(json: boolean, structured: unknown, text: string): void {
   process.stdout.write(json ? `${JSON.stringify(structured, null, 2)}\n` : `${text}\n`);
 }
 
+function starterSpec(projectName: string): string {
+  return `specVersion: backendcompiler.dev/v1
+
+project:
+  name: ${projectName}
+  description: Describe what this backend does
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  Note:
+    fields:
+      title:
+        type: string
+        required: true
+        maxLength: 200
+      body: string
+
+# Enable features here. Run \`backendgen list-features\` for the catalog and
+# \`backendgen describe-feature <name>\` for each feature's options.
+features:
+  crud: {}
+
+  # auth:
+  #   methods: [email_password]
+  #   roles: [admin, member]
+
+  # organizations: {}
+
+  # reservations:
+  #   resource: Note
+  #   owner: User
+  #   preventOverlap: true
+`;
+}
+
 async function loadAndValidate(filePath: string): Promise<{ path: string; spec: BackendSpec }> {
   const absolute = resolve(process.cwd(), filePath);
   const input = await loadSpecFile(absolute);
@@ -119,6 +159,30 @@ async function run(): Promise<void> {
     case "--help":
     case "-h": {
       process.stdout.write(HELP);
+      return;
+    }
+
+    case "init": {
+      const destination = resolve(process.cwd(), args.positional[0] ?? "backend.yaml");
+      const nameFlag = args.flags.get("name");
+      const projectName = typeof nameFlag === "string" ? nameFlag : "my-api";
+
+      const exists = await access(destination)
+        .then(() => true)
+        .catch(() => false);
+      if (exists) {
+        throw new CliError(`Refusing to overwrite existing file: ${destination}`);
+      }
+
+      await writeFile(destination, starterSpec(projectName), "utf8");
+      write(
+        json,
+        { created: destination },
+        `Created ${destination}\n\nNext steps:\n` +
+          `  backendgen validate ${args.positional[0] ?? "backend.yaml"}\n` +
+          `  backendgen generate ${args.positional[0] ?? "backend.yaml"} --output ./my-api\n\n` +
+          "Run `backendgen list-features` to see what you can enable.",
+      );
       return;
     }
 
@@ -281,10 +345,16 @@ async function run(): Promise<void> {
     case "test-generated": {
       const output = requireFlag(args, "output");
 
+      // The runner deliberately scrubs the environment; DATABASE_URL is the
+      // one variable the generated project legitimately needs (Prisma refuses
+      // to even validate its schema without it).
       const result = await runGeneratedTests({
         outputDirectory: resolve(process.cwd(), output),
         install: args.flags.get("install") === true,
         integration: args.flags.get("integration") === true,
+        ...(process.env.DATABASE_URL
+          ? { env: { DATABASE_URL: process.env.DATABASE_URL } }
+          : {}),
       });
 
       const structured = {

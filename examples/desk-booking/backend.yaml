@@ -1,0 +1,63 @@
+# Every feature at once: tenants, ownership, reservations and notifications.
+# Desks belong to venues, are booked per organization, and confirmations are
+# delivered through the notifications provider boundary.
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: everything-api
+  description: All features combined
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  User:
+    fields:
+      displayName:
+        type: string
+        required: true
+        minLength: 2
+        maxLength: 100
+
+  Venue:
+    fields:
+      name:
+        type: string
+        required: true
+        maxLength: 200
+
+  Desk:
+    fields:
+      label:
+        type: string
+        required: true
+        maxLength: 60
+      seats:
+        type: integer
+        required: true
+        minimum: 1
+    relations:
+      - name: venue
+        type: belongsTo
+        target: Venue
+        required: true
+
+features:
+  crud:
+    softDelete: [Desk]
+
+  auth:
+    roles: [admin, member]
+
+  organizations:
+    roles: [owner, admin, member]
+
+  reservations:
+    resource: Desk
+    owner: User
+    holdMinutes: 10
+
+  notifications:
+    provider: log
+    events: [user_registered, reservation_confirmed, reservation_cancelled]

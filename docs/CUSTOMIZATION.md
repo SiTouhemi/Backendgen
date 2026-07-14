@@ -1,7 +1,56 @@
 # Customization
 
-`.backendgen/manifest.json` records every compiler-owned and custom-scaffold file. Code under `src/generated/` is regenerated. Code under `src/custom/` is scaffolded once and belongs to the application developer. `CustomModule` is imported last so explicitly provided custom implementations can replace generated defaults.
+Generated projects separate compiler-owned code from yours:
 
-Use `backendgen diff` before regeneration. If a generated file was edited, generation fails with a stable conflict; move the behavior behind a listed customization contract instead of using `--force`. Untracked user files are preserved unless they collide with a newly generated path.
+- `src/generated/` — owned by the compiler, replaced on every generation. Editing a file here is allowed, but the next `backendgen generate` refuses to overwrite the edit (a stable conflict, not data loss) until you revert it, move the behavior into `src/custom/`, or pass `--force`.
+- `src/custom/` — scaffolded once, then never touched again. This is your extension surface.
+- `.backendgen/manifest.json` — records every compiler-owned and custom-scaffold file with a content hash. This is how regeneration knows what it may replace.
 
-MCP's `explain_customization_points` tool returns the exact paths, interfaces, and events for a specification without returning file contents.
+`CustomModule` (`src/custom/custom.module.ts`) is imported last in `app.module.ts`, so providers you register there override generated defaults.
+
+## The pattern: implement a generated interface
+
+Generated behavior that is meant to be replaced is exposed as an injection token plus an interface in `src/generated/`, with a write-once starter implementation in `src/custom/`. Example — reservation rules:
+
+```ts
+// src/custom/reservation-policy.ts (yours, never regenerated)
+import { Injectable } from '@nestjs/common';
+import { ReservationPolicy, ReservationRequest } from '../generated/reservations/reservation-policy';
+
+@Injectable()
+export class CustomReservationPolicy implements ReservationPolicy {
+  validateRequest(request: ReservationRequest): void {
+    if (request.startsAt.getTime() < Date.now()) {
+      throw new Error('A reservation cannot start in the past');
+    }
+  }
+  // ...
+}
+```
+
+Activate it in `src/custom/custom.module.ts`:
+
+```ts
+import { CUSTOM_RESERVATION_POLICY } from '../generated/reservations/reservation-policy';
+import { CustomReservationPolicy } from './reservation-policy';
+
+@Module({
+  providers: [{ provide: CUSTOM_RESERVATION_POLICY, useClass: CustomReservationPolicy }],
+  exports: [CUSTOM_RESERVATION_POLICY],
+})
+export class CustomModule {}
+```
+
+Because the policy lives in `src/custom/`, regeneration never conflicts with it, and because the generated service resolves the token, your rules run inside compiler-owned request handling.
+
+Every generation report lists the customization points for your specification. The MCP tool `explain_customization_points` returns the exact paths, interfaces, and events without returning file contents.
+
+## Safe regeneration workflow
+
+1. Edit the specification.
+2. `backendgen diff backend.yaml --output ./my-api` — see exactly what would change, including conflicts, without writing.
+3. `backendgen generate backend.yaml --output ./my-api`.
+
+If generation reports a modified-file conflict, the right fix is almost always moving the behavior behind a customization point rather than `--force` (which discards your edit). Untracked files you created are preserved unless they collide with a newly generated path.
+
+If the specification change altered entities, read [MIGRATIONS.md](MIGRATIONS.md) before deploying — the rewritten init migration must not be re-deployed over an applied one.

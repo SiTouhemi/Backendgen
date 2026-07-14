@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { GENERATOR_NAME } from "@backend-compiler/common";
 import { access, readFile, realpath } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { hashContents, readManifest } from "./manifest.js";
 import { assertSafeRelativePath } from "./plan.js";
 
@@ -108,6 +108,35 @@ async function verifyGeneratedProject(outputDirectory: string): Promise<CommandR
     truncated: false,
     durationMs: Date.now() - started,
   };
+}
+
+/**
+ * Locates npm's JS entry point so npm always runs through `process.execPath`.
+ * Node refuses to spawn `.cmd` shims without a shell, so on Windows the
+ * `npm.cmd` fallback would fail with EINVAL whenever `npm_execpath` is unset
+ * (for example when the CLI is invoked directly with `node`).
+ */
+async function resolveNpmCli(): Promise<string | null> {
+  const fromEnv = process.env.npm_execpath;
+  if (fromEnv) return fromEnv;
+
+  const nodeDirectory = dirname(process.execPath);
+  const candidates =
+    process.platform === "win32"
+      ? [join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js")]
+      : [
+          join(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+          join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+        ];
+
+  for (const candidate of candidates) {
+    const exists = await access(candidate)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) return candidate;
+  }
+
+  return null;
 }
 
 function runCommand(input: {
@@ -233,19 +262,19 @@ export async function runGeneratedTests(options: RunTestsOptions): Promise<RunTe
     return { success: false, tests: { passed: 0, failed: 0, total: 0 }, commands };
   }
 
-  const npmExecPath = process.env.npm_execpath;
+  const npmCli = await resolveNpmCli();
   const run = (args: string[]): Promise<CommandResult> =>
-    npmExecPath
+    npmCli
       ? runCommand({
           command: process.execPath,
-          args: [npmExecPath, ...args],
+          args: [npmCli, ...args],
           cwd,
           maxOutputBytes,
           timeoutMs,
           env,
         })
       : runCommand({
-          command: process.platform === "win32" ? "npm.cmd" : "npm",
+          command: "npm",
           args,
           cwd,
           maxOutputBytes,

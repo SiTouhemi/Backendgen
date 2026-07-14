@@ -1,0 +1,26 @@
+# The smallest useful backend: public CRUD, no authentication.
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: notes-api
+  description: Notes with pagination, filtering and sorting
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  Note:
+    fields:
+      title:
+        type: string
+        required: true
+        minLength: 1
+        maxLength: 200
+      body: text
+      pinned:
+        type: boolean
+        default: false
+
+features:
+  crud: {}

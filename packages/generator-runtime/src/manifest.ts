@@ -106,12 +106,29 @@ function isManifest(value: unknown): value is GenerationManifest {
   return true;
 }
 
-export async function readManifest(outputDirectory: string): Promise<GenerationManifest | null> {
+export type ManifestState =
+  | { status: "present"; manifest: GenerationManifest }
+  | { status: "absent" }
+  /** A manifest file exists but cannot be trusted; callers should say so. */
+  | { status: "invalid" };
+
+export async function readManifestState(outputDirectory: string): Promise<ManifestState> {
+  let source: string;
   try {
-    const source = await readFile(join(outputDirectory, MANIFEST_PATH), "utf8");
-    const parsed: unknown = JSON.parse(source);
-    return isManifest(parsed) ? parsed : null;
+    source = await readFile(join(outputDirectory, MANIFEST_PATH), "utf8");
   } catch {
-    return null;
+    return { status: "absent" };
   }
+
+  try {
+    const parsed: unknown = JSON.parse(source);
+    return isManifest(parsed) ? { status: "present", manifest: parsed } : { status: "invalid" };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+export async function readManifest(outputDirectory: string): Promise<GenerationManifest | null> {
+  const state = await readManifestState(outputDirectory);
+  return state.status === "present" ? state.manifest : null;
 }

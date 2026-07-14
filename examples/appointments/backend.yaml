@@ -1,0 +1,42 @@
+# Reservations without holds: holdMinutes 0 means an appointment is confirmed
+# the moment it is booked. The feature creates the Appointment entity.
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: appointments-api
+  description: Practitioner appointment scheduling
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  User:
+    fields:
+      displayName:
+        type: string
+        required: true
+        minLength: 2
+        maxLength: 100
+
+  Practitioner:
+    fields:
+      name:
+        type: string
+        required: true
+        maxLength: 120
+      specialty: string
+
+features:
+  crud: {}
+
+  auth:
+    roles: [admin, patient]
+
+  reservations:
+    entity: Appointment
+    resource: Practitioner
+    owner: User
+    holdMinutes: 0
+    minDurationMinutes: 15
+    maxDurationMinutes: 240

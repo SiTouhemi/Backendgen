@@ -1251,15 +1251,15 @@ export const authRenderer: FeatureTargetRenderer = {
         },
       ],
       packageDependencies: {
-        "@nestjs/jwt": "^11.0.0",
-        "@nestjs/passport": "^11.0.0",
-        "@nestjs/throttler": "^6.4.0",
-        bcryptjs: "^3.0.2",
-        passport: "^0.7.0",
-        "passport-jwt": "^4.0.1",
+        "@nestjs/jwt": "11.0.2",
+        "@nestjs/passport": "11.0.5",
+        "@nestjs/throttler": "6.5.0",
+        bcryptjs: "3.0.3",
+        passport: "0.7.0",
+        "passport-jwt": "4.0.1",
       },
       packageDevDependencies: {
-        "@types/passport-jwt": "^4.0.1",
+        "@types/passport-jwt": "4.0.1",
       },
       envExample: [
         {

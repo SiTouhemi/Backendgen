@@ -8,7 +8,7 @@ import {
   createManifest,
   hashContents,
   MANIFEST_PATH,
-  readManifest,
+  readManifestState,
   serializeManifest,
   type ManifestFile,
 } from "./manifest.js";
@@ -121,7 +121,8 @@ export async function generateBackend(options: GenerateOptions): Promise<Generat
     return { ok: false, issues: pathIssues };
   }
 
-  const manifest = await readManifest(outputDirectory);
+  const manifestState = await readManifestState(outputDirectory);
+  const manifest = manifestState.status === "present" ? manifestState.manifest : null;
   const force = options.force ?? false;
   const dryRun = options.dryRun ?? false;
 
@@ -131,6 +132,14 @@ export async function generateBackend(options: GenerateOptions): Promise<Generat
     manifest,
     force,
   });
+
+  if (manifestState.status === "invalid") {
+    plan.warnings.unshift(
+      `${MANIFEST_PATH} exists but is not a valid generation manifest. ` +
+        "Existing files are treated as untracked; regenerate into a clean directory " +
+        "or restore the manifest from version control.",
+    );
+  }
 
   const report = buildReport({
     compiled: compiled.value,

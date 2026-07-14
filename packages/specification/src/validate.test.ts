@@ -79,10 +79,31 @@ describe("validateSpec", () => {
     });
   });
 
+  it("accepts indexes on relation foreign keys, like the compiler does", () => {
+    const input = validSpec();
+    Object.assign(input.entities.Room, { indexes: [{ fields: ["ownerId"] }] });
+
+    const result = validateSpec(input);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts holdMinutes 0, which disables holds", () => {
+    const input = validSpec();
+    input.features = {
+      reservations: { resource: "Room", owner: "User", holdMinutes: 0 },
+    };
+
+    const result = validateSpec(input);
+
+    expect(result.ok).toBe(true);
+  });
+
   it("validates reservation entity references and hold duration", () => {
     const input = validSpec();
     input.features = {
-      reservations: { resource: "MissingRoom", owner: "User", holdMinutes: 0 },
+      // holdMinutes 0 is valid (it disables holds); negative values are not.
+      reservations: { resource: "MissingRoom", owner: "User", holdMinutes: -5 },
     };
 
     const result = validateSpec(input);
