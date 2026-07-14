@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/common" },
+    { "path": "packages/specification" },
+    { "path": "packages/compiler" },
+    { "path": "packages/target-sdk" },
+    { "path": "packages/feature-sdk" },
+    { "path": "targets/nestjs-prisma" },
+    { "path": "features/crud" },
+    { "path": "features/auth" },
+    { "path": "features/organizations" },
+    { "path": "features/reservations" },
+    { "path": "features/notifications" },
+    { "path": "packages/generator-runtime" },
+    { "path": "packages/testing" },
+    { "path": "apps/cli" },
+    { "path": "apps/mcp-server" }
+  ]
+}

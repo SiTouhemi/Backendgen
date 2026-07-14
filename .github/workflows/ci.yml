@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run licenses
+      - run: npm audit --audit-level=high
+
+  generated-project:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - basic-crud
+          - authentication
+          - multi-tenant-saas
+          - hotel-reservation
+          - appointment-scheduling
+          - all-features
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: backendgen
+          POSTGRES_PASSWORD: backendgen
+          POSTGRES_DB: backendgen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U backendgen -d backendgen"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKENDGEN_E2E_BUILD: "1"
+      BACKENDGEN_E2E_SCENARIO: ${{ matrix.scenario }}
+      DATABASE_URL: postgresql://backendgen:backendgen@127.0.0.1:5432/backendgen?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:e2e

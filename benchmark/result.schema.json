@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://backendcompiler.dev/schemas/benchmark-result.v1.json",
+  "type": "object",
+  "required": ["schemaVersion", "scenario", "arm", "model", "runId", "measurements", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "backendcompiler.dev/benchmark-result/v1" },
+    "scenario": { "enum": ["todo-crud", "authentication", "multi-tenant-saas", "hotel-booking", "appointment-scheduling"] },
+    "arm": { "enum": ["direct", "compiler"] },
+    "model": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "measurements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens", "toolCallTokens", "wallClockMs", "agentWrittenFiles", "generatedFiles", "humanCorrections", "generatedCodeRewrites"],
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "toolCallTokens": { "type": "integer", "minimum": 0 },
+        "wallClockMs": { "type": "integer", "minimum": 0 },
+        "agentWrittenFiles": { "type": "integer", "minimum": 0 },
+        "generatedFiles": { "type": "integer", "minimum": 0 },
+        "humanCorrections": { "type": "integer", "minimum": 0 },
+        "generatedCodeRewrites": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["buildPassed", "testsPassed"],
+      "properties": { "buildPassed": { "type": "boolean" }, "testsPassed": { "type": "boolean" }, "notes": { "type": "string" } }
+    }
+  }
+}

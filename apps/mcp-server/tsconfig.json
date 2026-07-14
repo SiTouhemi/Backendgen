@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/mcp-server.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/common" },
+    { "path": "../../packages/compiler" },
+    { "path": "../../packages/feature-sdk" },
+    { "path": "../../packages/generator-runtime" },
+    { "path": "../../packages/specification" },
+    { "path": "../../packages/target-sdk" }
+  ]
+}

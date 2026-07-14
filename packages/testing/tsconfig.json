@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/testing.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../common" },
+    { "path": "../compiler" },
+    { "path": "../feature-sdk" },
+    { "path": "../generator-runtime" },
+    { "path": "../specification" },
+    { "path": "../target-sdk" }
+  ]
+}

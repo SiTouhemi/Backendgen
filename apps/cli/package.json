@@ -1,0 +1,17 @@
+{
+  "name": "@backend-compiler/cli",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "backendgen": "./dist/src/index.js"
+  },
+  "dependencies": {
+    "@backend-compiler/common": "0.2.0",
+    "@backend-compiler/compiler": "0.1.0",
+    "@backend-compiler/feature-sdk": "0.2.0",
+    "@backend-compiler/generator-runtime": "0.2.0",
+    "@backend-compiler/specification": "0.1.0",
+    "@backend-compiler/target-sdk": "0.2.0"
+  }
+}

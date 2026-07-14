@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.backendgen/
+generated/
+benchmark/runs/
+graphify-out/
+.tmp-*/
+*.log
+*.sqlite
+*.db

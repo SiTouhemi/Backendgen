@@ -1,0 +1,16 @@
+{
+  "name": "@backend-compiler/compiler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "dependencies": {
+    "@backend-compiler/common": "0.2.0",
+    "@backend-compiler/specification": "0.1.0"
+  }
+}

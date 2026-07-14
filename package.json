@@ -1,0 +1,35 @@
+{
+  "name": "backend-compiler",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "features/*",
+    "targets/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "npm run test:unit",
+    "test:unit": "npm run build && vitest run --exclude \"**/*.e2e.test.ts\"",
+    "test:e2e": "npm run build && vitest run --config vitest.e2e.config.ts",
+    "cli": "npm run build --silent && node apps/cli/dist/src/index.js",
+    "validate:example": "npm run cli -- validate examples/hotel-booking/backend.yaml",
+    "inspect:example": "npm run cli -- inspect examples/hotel-booking/backend.yaml",
+    "generate:example": "npm run cli -- generate examples/hotel-booking/backend.yaml --output ./generated/hotel-api",
+    "mcp": "npm run build --silent && node apps/mcp-server/dist/src/index.js",
+    "licenses": "node scripts/license-report.mjs",
+    "benchmark:validate": "node benchmark/validate-results.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

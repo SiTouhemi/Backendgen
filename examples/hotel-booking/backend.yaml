@@ -1,0 +1,73 @@
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: hotel-api
+  description: Hotel room availability and reservation backend
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  # The `auth` feature adds email, passwordHash, role and emailVerifiedAt to this
+  # entity, and removes it from the generic CRUD surface.
+  User:
+    fields:
+      displayName:
+        type: string
+        required: true
+        minLength: 2
+        maxLength: 100
+
+  Hotel:
+    fields:
+      name:
+        type: string
+        required: true
+        maxLength: 200
+      address: string
+      latitude: decimal
+      longitude: decimal
+
+  Room:
+    fields:
+      number:
+        type: string
+        required: true
+      capacity:
+        type: integer
+        required: true
+        minimum: 1
+      price:
+        type: decimal
+        required: true
+        minimum: 0
+    relations:
+      - name: hotel
+        type: belongsTo
+        target: Hotel
+        required: true
+    indexes:
+      - fields: [number]
+
+# The `reservations` feature owns the Reservation entity. Its interval, status,
+# hold and idempotency fields belong to the feature, not to this specification,
+# which is why Reservation is not declared above.
+features:
+  crud:
+    softDelete: [Room]
+
+  auth:
+    methods: [email_password]
+    roles: [admin, customer]
+
+  reservations:
+    resource: Room
+    owner: User
+    preventOverlap: true
+    holdMinutes: 15
+
+  notifications:
+    provider: resend
+    from: bookings@example.com
+    events: [reservation_confirmed, reservation_cancelled]

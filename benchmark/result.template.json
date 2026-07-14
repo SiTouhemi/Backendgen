@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "backendcompiler.dev/benchmark-result/v1",
+  "scenario": "todo-crud",
+  "arm": "compiler",
+  "model": "REPLACE_WITH_EXACT_MODEL_VERSION",
+  "runId": "REPLACE_WITH_UNIQUE_RUN_ID",
+  "measurements": {
+    "inputTokens": null,
+    "outputTokens": null,
+    "toolCallTokens": null,
+    "wallClockMs": null,
+    "agentWrittenFiles": null,
+    "generatedFiles": null,
+    "humanCorrections": null,
+    "generatedCodeRewrites": null
+  },
+  "outcome": { "buildPassed": false, "testsPassed": false, "notes": "Template only; not an observed result." }
+}
