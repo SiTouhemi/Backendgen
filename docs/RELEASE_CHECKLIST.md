@@ -4,7 +4,7 @@
 - [x] TypeScript build and unit suites pass.
 - [x] CLI subprocess and MCP protocol contracts are tested.
 - [x] Six scenarios generate and regenerate deterministically with custom files preserved.
-- [x] A generated CRUD application installs, Prisma-validates, builds, and passes unit tests on Windows.
+- [x] All six generated applications install, Prisma-validate, build, and pass unit tests on Windows.
 - [x] CI defines PostgreSQL-backed execution for every scenario.
 - [x] License inventory, benchmark foundation, and OSS/security documents exist.
 - [ ] Observe a green public GitHub Actions run.

@@ -4,7 +4,7 @@ Audit date: 2026-07-14
 
 ## Implementation update
 
-The completion pass added executable root E2E tests, deterministic license reporting, CLI subprocess coverage, MCP protocol and canonical sandbox tests, target composition conflict tests, a PostgreSQL CI matrix, a benchmark schema/validator, and open-source/security documentation. The six database-independent generated lifecycles pass, and a clean generated basic CRUD project installs, Prisma-validates, builds, and passes its generated unit suite on Windows.
+The completion pass added executable root E2E tests, deterministic license reporting, CLI subprocess coverage, MCP protocol and canonical sandbox tests, target composition conflict tests, a PostgreSQL CI matrix, a benchmark schema/validator, and open-source/security documentation. The six database-independent generated lifecycles pass. Clean projects for all six scenarios install, Prisma-validate, build, and pass their generated unit suites on Windows; the full matrix exposed and verified a fix for runtime Prisma enum imports in response DTOs.
 
 PostgreSQL behavior remains pending execution because PostgreSQL/Docker is unavailable on this workstation. CI is configured to supply that evidence, but a workflow file is not itself proof of a green run. See `docs/RELEASE_CHECKLIST.md`.
 

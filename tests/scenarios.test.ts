@@ -106,6 +106,12 @@ describe("scenarios", () => {
 
     const paths = rendered.files.map((file) => file.path);
     expect(paths).toContain("test/tenant-isolation.e2e-spec.ts");
+
+    const response = rendered.files.find(
+      (file) => file.path === "src/generated/project/dto/project.response.dto.ts",
+    )!;
+    expect(response.contents).toContain("import { ProjectStatus } from '@prisma/client';");
+    expect(response.contents).toContain("import type { Project } from '@prisma/client';");
   });
 
   it("hotel-reservation enforces overlap in the database, not in the service", () => {

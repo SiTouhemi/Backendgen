@@ -290,7 +290,8 @@ function responseDto(entity: NormalizedEntity): string {
   const enums = enumImports(entity);
   return (
     "import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';\n" +
-    `import type { ${[names.model(entity.name), ...enums].sort().join(", ")} } from '@prisma/client';\n` +
+    importLine(enums, "@prisma/client") +
+    `import type { ${names.model(entity.name)} } from '@prisma/client';\n` +
     `\nexport class ${model}ResponseDto {\n` +
     properties.join("\n").trimEnd() +
     "\n}\n\n" +
