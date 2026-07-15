@@ -65,6 +65,8 @@ export interface ProjectOptions {
   apiPrefix?: string;
   /** Default HTTP port written into generated configuration. Defaults to 3000. */
   port?: number;
+  /** Emit the typed API client under `client/`. Defaults to true. */
+  client?: boolean;
 }
 
 export interface BackendSpec {

@@ -56,6 +56,8 @@ export interface RenderResult {
 export interface ProjectSettings {
   apiPrefix: string;
   port: number;
+  /** Whether the target should emit its typed API client. */
+  client: boolean;
 }
 
 /**

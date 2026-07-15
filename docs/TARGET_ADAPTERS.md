@@ -14,3 +14,14 @@ Adapter checklist:
 6. Pass feature conformance, generated build, migration, and integration tests.
 
 Only `nestjs-prisma` is supported during the alpha.
+
+## Generated TypeScript client
+
+The nestjs-prisma target emits a typed, zero-dependency fetch client under
+`client/` (disable with `options.client: false`). It is rendered from the same
+IR as the server: CRUD resources per entity, auth (register/login/refresh/
+logout/me), organization scoping via `withOrganization(id)`, and reservations
+including `Idempotency-Key` support. Errors surface as `ApiRequestError` with
+the API's structured body. `npm run build:client` compiles it with its own
+strict tsconfig; the generated `test/client.e2e-spec.ts` proves client/server
+agreement against the live HTTP server.

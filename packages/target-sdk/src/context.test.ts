@@ -38,7 +38,7 @@ describe("target render composition", () => {
     const ir = {
       target: { database: "postgresql" }, entities: [], features: [],
     } as unknown as BackendIR;
-    const context = createRenderContext({ ir, targetId: "test", settings: { apiPrefix: "api", port: 3000 } });
+    const context = createRenderContext({ ir, targetId: "test", settings: { apiPrefix: "api", port: 3000, client: true } });
     expect(() => context.entity("Missing")).toThrowError(/Unknown entity/);
   });
 });

@@ -6,6 +6,7 @@
 
 - Incremental migrations: generation records a schema snapshot and emits ordered `ALTER` migrations for specification changes instead of rewriting applied history. Additive changes are automatic, required columns demand a backfill default (`migrate.not-null-requires-default`), and destructive statements are refused without `--allow-destructive`, then emitted with explicit `-- DESTRUCTIVE:` labels. Enum additions are isolated in a non-transactional trailing section.
 - Deterministic development seeds: generated projects gain `prisma/seed.ts` and `npm run db:seed` — content-addressed ids, constraint-respecting values, upsert-only writes, tenant-distributed rows, and an integration test proving determinism and idempotence.
+- Typed API client: every generated project ships a zero-dependency `client/` package built from the same model as the server (CRUD resources, auth with rotation, tenant scoping via `withOrganization`, reservations with idempotency keys, structured `ApiRequestError`). `npm run build:client` compiles it standalone; a generated e2e suite drives the live HTTP server through the client. Disable with `options.client: false`.
 
 ### Release-readiness pass
 

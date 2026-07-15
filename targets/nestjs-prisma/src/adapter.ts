@@ -8,6 +8,7 @@ import {
   type TargetAdapter,
   type TargetRenderContext,
 } from "@backend-compiler/target-sdk";
+import { clientFiles } from "./client.js";
 import { BASE_DEPENDENCIES, BASE_DEV_DEPENDENCIES, BASE_SCRIPTS } from "./deps.js";
 import { MIGRATION_DIRECTORY, MIGRATIONS_ROOT, renderInitialMigration } from "./prisma-ddl.js";
 import { renderDiffMigration } from "./prisma-ddl-diff.js";
@@ -212,10 +213,15 @@ export const nestjsPrismaTarget: TargetAdapter = {
   renderProject(context: TargetRenderContext): RenderResult {
     return {
       ...emptyRenderResult(),
-      files: projectFiles(context),
+      files: [...projectFiles(context), ...clientFiles(context)],
       packageDependencies: { ...BASE_DEPENDENCIES },
       packageDevDependencies: { ...BASE_DEV_DEPENDENCIES },
-      scripts: { ...BASE_SCRIPTS },
+      scripts: {
+        ...BASE_SCRIPTS,
+        ...(context.settings.client
+          ? { "build:client": "tsc -p client/tsconfig.json" }
+          : {}),
+      },
     };
   },
 

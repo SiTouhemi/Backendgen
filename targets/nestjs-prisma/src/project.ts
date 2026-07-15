@@ -32,13 +32,13 @@ const TSCONFIG = `{
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "client"]
 }
 `;
 
 const TSCONFIG_BUILD = `{
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  "exclude": ["node_modules", "test", "dist", "client", "**/*spec.ts"]
 }
 `;
 
@@ -872,7 +872,30 @@ ${entities || "- none"}
 |---|---|---|---|
 ${endpoints || "| | | | |"}
 
-## Generated and custom code
+${
+    context.settings.client
+      ? `## TypeScript client
+
+\`client/\` holds a zero-dependency typed API client generated from the same
+model as the server, so the two cannot drift. Build it with
+\`npm run build:client\` and publish or vendor \`client/\` as
+\`${ir.project.name}-client\`.
+
+\`\`\`ts
+import { createClient } from '${ir.project.name}-client';
+
+const api = createClient({
+  baseUrl: 'http://localhost:${settings.port}',
+  getAccessToken: () => tokenStore.accessToken,
+});
+\`\`\`
+
+Non-2xx responses throw \`ApiRequestError\` carrying the API's structured
+error body.
+
+`
+      : ""
+  }## Generated and custom code
 
 \`src/generated/\` is owned by the compiler and is replaced on every generation.
 \`src/custom/\` is yours; the compiler writes it once and never overwrites it.

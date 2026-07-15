@@ -81,6 +81,41 @@ describe("scenarios", () => {
   );
 
   it.each(SCENARIOS.map((scenario) => scenario.name))(
+    "renders a typed API client for '%s'",
+    (name) => {
+      const { compiled, rendered } = compile(name);
+      const paths = rendered.files.map((file) => file.path);
+
+      expect(paths).toContain("client/src/index.ts");
+      expect(paths).toContain("client/src/types.ts");
+      expect(paths).toContain("client/package.json");
+
+      const index = rendered.files.find((file) => file.path === "client/src/index.ts")!;
+      for (const entity of compiled.ir.entities.filter((candidate) => candidate.crud)) {
+        expect(index.contents).toContain(`Create${entity.name}Input`);
+      }
+
+      const packageJson = JSON.parse(
+        rendered.files.find((file) => file.path === "package.json")!.contents,
+      ) as { scripts: Record<string, string> };
+      expect(packageJson.scripts["build:client"]).toBe("tsc -p client/tsconfig.json");
+    },
+  );
+
+  it("omits the client when options.client is false", () => {
+    const scenario = SCENARIOS.find((candidate) => candidate.name === "basic-crud")!;
+    const spec = structuredClone(scenario.spec);
+    spec.options = { client: false };
+
+    const result = compileBackend(spec, { features, targets });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const paths = renderBackend(result.value).files.map((file) => file.path);
+    expect(paths.some((path) => path.startsWith("client/"))).toBe(false);
+  });
+
+  it.each(SCENARIOS.map((scenario) => scenario.name))(
     "pins every direct generated dependency for '%s'",
     (name) => {
       const { rendered } = compile(name);

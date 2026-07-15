@@ -47,12 +47,13 @@ export type CompileOutcome =
   | { ok: true; value: CompiledBackend }
   | { ok: false; issues: Issue[] };
 
-const DEFAULT_SETTINGS: ProjectSettings = { apiPrefix: "api", port: 3000 };
+const DEFAULT_SETTINGS: ProjectSettings = { apiPrefix: "api", port: 3000, client: true };
 
 function projectSettings(spec: BackendSpec): ProjectSettings {
   return {
     apiPrefix: spec.options?.apiPrefix ?? DEFAULT_SETTINGS.apiPrefix,
     port: spec.options?.port ?? DEFAULT_SETTINGS.port,
+    client: spec.options?.client ?? DEFAULT_SETTINGS.client,
   };
 }
 
