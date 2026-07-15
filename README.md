@@ -58,7 +58,7 @@ target an existing database instead, export `DATABASE_URL` and
 
 Generated files and user code are separated. Files marked `generated` in `.backendgen/manifest.json` are compiler-owned. Files marked `custom-scaffold` are written once and never overwritten. Generation refuses to replace locally modified generated files unless `--force` is explicit.
 
-Regenerating after an entity change rewrites the initial migration; read [migrations and schema evolution](docs/MIGRATIONS.md) before deploying over an applied migration.
+Schema changes regenerate as incremental `ALTER` migrations on top of an immutable history; destructive statements are refused unless `--allow-destructive` is explicit. See [migrations and schema evolution](docs/MIGRATIONS.md).
 
 Account verification/reset requires the notifications feature with a delivering `resend` or `custom` provider. The `log` provider is a metadata-only sink and intentionally never prints recipients, bodies, links, or tokens. Generated production recovery links require an HTTPS `APP_PUBLIC_URL`.
 

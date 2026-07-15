@@ -1,5 +1,6 @@
 import type { Issue } from "@backend-compiler/common";
 import type { BackendIR, Database, NormalizedEntity } from "@backend-compiler/compiler";
+import type { TargetMigrationSupport } from "./migrations.js";
 
 /**
  * `generated` files are owned by the compiler and are replaced on every run.
@@ -102,6 +103,13 @@ export interface TargetAdapter {
   renderProject(context: TargetRenderContext): RenderResult;
   /** Data model: schema and migrations for every entity in the IR. */
   renderEntities(context: TargetRenderContext): RenderResult;
+  /**
+   * Incremental-migration capability. When present, the generator runtime keeps
+   * a schema snapshot and emits an incremental migration for a changed spec
+   * instead of rewriting the initial migration. Absent means the target only
+   * supports the rewrite-in-place workflow.
+   */
+  migrations?: TargetMigrationSupport;
   /**
    * Final composition pass. Receives every contribution collected so far and
    * emits the files that depend on them (application root module, package

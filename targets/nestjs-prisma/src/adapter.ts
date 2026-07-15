@@ -9,7 +9,13 @@ import {
   type TargetRenderContext,
 } from "@backend-compiler/target-sdk";
 import { BASE_DEPENDENCIES, BASE_DEV_DEPENDENCIES, BASE_SCRIPTS } from "./deps.js";
-import { MIGRATION_DIRECTORY, renderInitialMigration } from "./prisma-ddl.js";
+import { MIGRATION_DIRECTORY, MIGRATIONS_ROOT, renderInitialMigration } from "./prisma-ddl.js";
+import { renderDiffMigration } from "./prisma-ddl-diff.js";
+import {
+  buildSchemaSnapshot,
+  parseSchemaSnapshot,
+  serializeSchemaSnapshot,
+} from "./schema-snapshot.js";
 import { renderPrismaSchema } from "./prisma-schema.js";
 import { projectFiles } from "./project.js";
 
@@ -221,6 +227,16 @@ export const nestjsPrismaTarget: TargetAdapter = {
         generated("prisma/migrations/migration_lock.toml", 'provider = "postgresql"\n'),
       ],
     };
+  },
+
+  migrations: {
+    initialMigrationDirectory: MIGRATION_DIRECTORY,
+    migrationsRoot: MIGRATIONS_ROOT,
+    incrementalTag: "backendgen",
+    buildSnapshot: buildSchemaSnapshot,
+    serializeSnapshot: serializeSchemaSnapshot,
+    parseSnapshot: parseSchemaSnapshot,
+    renderDiffMigration,
   },
 
   compose(context: TargetRenderContext, contributions: RenderResult): RenderResult {

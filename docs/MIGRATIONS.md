@@ -1,88 +1,115 @@
 # Database migrations and schema evolution
 
-The compiler emits one initial migration, `prisma/migrations/00000000000000_init/migration.sql`, plus the Prisma schema. Regenerating after a specification change rewrites both **in place**. That is safe exactly as long as the migration has never been applied to a database you care about.
+The compiler owns your migration history. The first generation emits
+`prisma/migrations/00000000000000_init/migration.sql` and records a schema
+snapshot in `.backendgen/schema-snapshot.json`. Every later generation diffs
+the new specification against that snapshot and emits **one new incremental
+migration** — `prisma/migrations/00000000000001_backendgen/migration.sql`,
+`…02_backendgen`, and so on — leaving every previously emitted migration
+byte-for-byte untouched.
 
 ## The rule
 
-> A migration that has been applied is immutable. Prisma records a checksum of every applied migration; deploying a rewritten file fails, and bypassing the check causes silent schema drift.
+> A migration that has been applied is immutable. Prisma records a checksum of
+> every applied migration; deploying a rewritten file fails, and bypassing the
+> check causes silent schema drift.
 
-The generator warns when a regeneration changes an existing migration file. What to do depends on where you are:
+The generator enforces this for you: once a snapshot exists, history is frozen
+and only new migrations are appended.
 
-## Development (no data worth keeping)
-
-Regenerate, then reset:
+## The normal loop
 
 ```sh
+# edit backend.yaml, then:
 backendgen generate backend.yaml --output ./my-api
 cd my-api
-npx prisma migrate reset   # drops, re-applies the rewritten init migration, re-seeds
+npx prisma migrate deploy    # applies only the new incremental migration
 ```
 
-This is the intended loop while iterating on a specification.
+`backendgen diff` (or `generate --dry-run`) previews the migration a change
+would produce without writing anything.
 
-## Production (an applied migration exists)
+Migration folder names use a deterministic counter, not a timestamp: Prisma
+only requires lexicographic ordering, and a counter keeps generation
+byte-identical across machines and reruns.
 
-Do **not** deploy the rewritten `_init` migration. Create an incremental migration instead:
+## Safety classes
 
-1. Regenerate into the project as usual. The schema (`prisma/schema.prisma`) now reflects the new specification; the rewritten init migration is the file you must not re-deploy.
-2. Restore the applied migration file from version control so history matches the database:
-   ```sh
-   git checkout -- prisma/migrations/00000000000000_init/migration.sql
-   ```
-3. Create a separate empty PostgreSQL database for Prisma's shadow database and
-   export its URL. Prisma requires this when a migration directory is a diff
-   source:
-   ```sh
-   export SHADOW_DATABASE_URL="postgresql://user:password@localhost:5432/my_api_shadow"
-   ```
-4. Generate the incremental SQL into a temporary file. Do not create the new
-   migration directory until after the diff, or Prisma may interpret the empty
-   directory as part of the existing migration history:
-   ```sh
-   migration_sql="$(mktemp)"
-   npx prisma migrate diff \
-     --from-migrations prisma/migrations \
-     --to-schema-datamodel prisma/schema.prisma \
-     --shadow-database-url "$SHADOW_DATABASE_URL" \
-     --script \
-     --output "$migration_sql"
+Every schema change is classified before any SQL is written:
 
-   migration_dir="prisma/migrations/$(date +%Y%m%d%H%M%S)_update"
-   mkdir -p "$migration_dir"
-   mv "$migration_sql" "$migration_dir/migration.sql"
-   ```
-5. Review the SQL — especially drops and type changes — then deploy:
-   ```sh
-   npx prisma migrate deploy
-   ```
+| Class | Examples | Behaviour |
+|---|---|---|
+| safe | new table, new nullable column, new index, new enum value | emitted normally |
+| needs-default | new **required** column on an existing table | allowed only when the field has a `default` in the specification (used to backfill); otherwise generation fails with `migrate.not-null-requires-default` |
+| destructive | drop table/column/enum, column type change, switching a foreign key to `CASCADE` | generation **refuses** with `migrate.destructive-change`; re-run with `--allow-destructive` to emit the statements, each preceded by a `-- DESTRUCTIVE:` comment |
 
-The incremental migration file is yours, not the compiler's: it is untracked by the manifest and future regenerations will not touch it. Only the `_init` migration and `schema.prisma` are compiler-owned.
+Review anything destructive before deploying. `SET NOT NULL` on an existing
+column fails at deploy time if rows still hold NULLs — backfill first.
+
+Enum additions (`ALTER TYPE … ADD VALUE`) are emitted in their own trailing
+section: they cannot run inside a transaction block with other DDL on older
+PostgreSQL versions.
+
+## Development shortcut
+
+While iterating with a database you do not care about, `npx prisma migrate
+reset` re-applies the whole history (and the seed) from scratch. If you would
+rather squash accumulated increments during early development, delete the
+generated project's `prisma/migrations`, `.backendgen/schema-snapshot.json`
+and the database, then regenerate for a fresh `_init`.
+
+## Projects generated before snapshots existed
+
+A project without `.backendgen/schema-snapshot.json` falls back to the old
+behaviour once: the initial migration is rewritten in place (with a warning)
+and a snapshot is recorded, so every generation after that is incremental. If
+the old `_init` was already applied to a database you care about, restore it
+from version control (`git checkout -- prisma/migrations/00000000000000_init`)
+before deploying, then let the next specification change produce a proper
+incremental migration.
 
 ## Upgrading a database created by an earlier 0.2 alpha
 
-This hardening release changes database semantics, not only generated TypeScript. Regenerating is sufficient for a brand-new database. An existing database needs a reviewed incremental migration; leaving the old schema in place can preserve unsafe cascades or globally scoped idempotency even though the new Prisma schema looks correct.
+The 2026-07 hardening release changed database semantics, not only generated
+TypeScript. An existing database needs a reviewed incremental migration;
+regenerating alone is only sufficient for a brand-new database. Review the
+diff for all of the following:
 
-Review the diff for all of the following:
-
-1. **Timezone-aware timestamps.** Generated datetime columns, including `createdAt`, `updatedAt`, soft-delete markers, recovery/session expiry, reservations, and outbox leases, now use `TIMESTAMPTZ(3)`. PostgreSQL must be told what timezone legacy `TIMESTAMP` values represented. If they were UTC, use the equivalent of:
+1. **Timezone-aware timestamps.** Generated datetime columns now use
+   `TIMESTAMPTZ(3)`. PostgreSQL must be told what timezone legacy `TIMESTAMP`
+   values represented. If they were UTC:
    ```sql
    ALTER TABLE "Example"
      ALTER COLUMN "createdAt" TYPE TIMESTAMPTZ(3)
      USING "createdAt" AT TIME ZONE 'UTC';
    ```
-   Substitute the actual historical timezone if the old application wrote local wall-clock values. Guessing here shifts stored instants.
-2. **Foreign-key actions.** Earlier output cascaded every required relation. Required relations now default to `RESTRICT`; only auth tokens/sessions and organization memberships explicitly cascade. Drop and recreate affected foreign keys with the action shown in the regenerated Prisma schema/migration. This must be done before relying on parent-delete conflict handling.
-3. **Reservation idempotency.** Drop the old global unique index on `idempotencyKey`, add nullable `requestFingerprint`, and create the new unique index on `(ownerId, idempotencyKey)` or `(organizationId, ownerId, idempotencyKey)`. Existing rows have no trustworthy fingerprint; replaying one of their non-null keys intentionally returns 409. Keep them for audit/history or expire them according to application policy—do not invent fingerprints from incomplete data.
-4. **Reservation overlap range.** Drop the old exclusion constraint before timestamp conversion and recreate it with `tstzrange("startsAt", "endsAt", '[)')`. Verify `btree_gist` remains installed.
-5. **New access-path indexes.** Apply the generated foreign-key indexes and tenant ordering index `(organizationId, createdAt, id)`. On large production tables, plan lock time and consider an operator-authored `CREATE INDEX CONCURRENTLY` rollout rather than copying the initial migration verbatim.
-6. **Notification outbox.** Enabling durable notification events adds `NotificationOutbox`. Deploy its table/index before starting application instances that enqueue or dispatch notifications.
+   Substitute the actual historical timezone if the old application wrote
+   local wall-clock values. Guessing here shifts stored instants.
+2. **Foreign-key actions.** Earlier output cascaded every required relation.
+   Required relations now default to `RESTRICT`; only auth tokens/sessions and
+   organization memberships explicitly cascade. Drop and recreate affected
+   foreign keys with the action shown in the regenerated schema.
+3. **Reservation idempotency.** Drop the old global unique index on
+   `idempotencyKey`, add nullable `requestFingerprint`, and create the new
+   unique index on `(ownerId, idempotencyKey)` or
+   `(organizationId, ownerId, idempotencyKey)`. Existing rows have no
+   trustworthy fingerprint; replaying one of their non-null keys intentionally
+   returns 409.
+4. **Reservation overlap range.** Recreate the exclusion constraint with
+   `tstzrange("startsAt", "endsAt", '[)')` after the timestamp conversion.
+   Verify `btree_gist` remains installed.
+5. **New access-path indexes.** On large production tables, plan lock time and
+   consider an operator-authored `CREATE INDEX CONCURRENTLY` rollout.
+6. **Notification outbox.** Deploy the `NotificationOutbox` table before
+   starting instances that enqueue or dispatch notifications.
 
-Take a backup, run the incremental SQL against a production-sized clone, compare constraints with `prisma validate` plus database catalog queries, and only then deploy. The compiler cannot infer the timezone of old values or the retention policy for legacy idempotency keys.
+Take a backup, rehearse against a production-sized clone, then deploy.
 
 ## Feature-owned constraints
 
-Some feature packs emit SQL that Prisma's schema language cannot express — the reservations overlap exclusion constraint (`btree_gist`) lives in the init migration. If your incremental diff touches the reserved resource or interval columns, re-check that the constraint survives; `prisma migrate diff` does not know about it.
-
-## Roadmap
-
-Automatic incremental migration generation (the compiler producing step 3 itself, keyed off the previous schema recorded in the manifest) is planned once the single-migration workflow has design-partner mileage. Until then the guardrail is the warning plus this document.
+Feature packs emit SQL Prisma's schema language cannot express — the
+reservations overlap exclusion constraint, for example. These statements are
+part of the snapshot: adding or reconfiguring such a feature emits the new
+statements in the incremental migration, and removing one emits a commented
+note (the generator never guesses how to reverse feature-owned SQL — review
+and drop it by hand).

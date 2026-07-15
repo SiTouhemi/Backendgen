@@ -12,6 +12,16 @@ export {
   writableFields,
   writableForeignKeys,
 } from "./naming.js";
-export { MIGRATION_DIRECTORY, renderInitialMigration } from "./prisma-ddl.js";
+export {
+  MIGRATION_DIRECTORY,
+  MIGRATIONS_ROOT,
+  renderInitialMigration,
+} from "./prisma-ddl.js";
+export { renderDiffMigration } from "./prisma-ddl-diff.js";
+export {
+  buildSchemaSnapshot,
+  parseSchemaSnapshot,
+  serializeSchemaSnapshot,
+} from "./schema-snapshot.js";
 export { renderPrismaSchema } from "./prisma-schema.js";
 export { validationDecorators } from "./validation.js";

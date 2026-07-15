@@ -30,8 +30,8 @@ Usage:
   backendgen describe-feature <feature> [--json]
   backendgen validate <spec.yaml> [--json]
   backendgen inspect <spec.yaml> [--json]
-  backendgen generate <spec.yaml> --output <dir> [--dry-run] [--force] [--json]
-  backendgen diff <spec.yaml> --output <dir> [--json]
+  backendgen generate <spec.yaml> --output <dir> [--dry-run] [--force] [--allow-destructive] [--json]
+  backendgen diff <spec.yaml> --output <dir> [--allow-destructive] [--json]
   backendgen test-generated --output <dir> [--install] [--integration] [--json]
 
 Exit codes:
@@ -355,6 +355,7 @@ async function run(): Promise<void> {
         targets,
         dryRun,
         force: args.flags.get("force") === true,
+        allowDestructive: args.flags.get("allow-destructive") === true,
       });
 
       if (!outcome.ok) {

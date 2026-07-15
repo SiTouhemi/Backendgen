@@ -2,6 +2,11 @@
 
 ## 0.2.0 - Unreleased alpha
 
+### Feature expansion
+
+- Incremental migrations: generation records a schema snapshot and emits ordered `ALTER` migrations for specification changes instead of rewriting applied history. Additive changes are automatic, required columns demand a backfill default (`migrate.not-null-requires-default`), and destructive statements are refused without `--allow-destructive`, then emitted with explicit `-- DESTRUCTIVE:` labels. Enum additions are isolated in a non-transactional trailing section.
+- Deterministic development seeds: generated projects gain `prisma/seed.ts` and `npm run db:seed` — content-addressed ids, constraint-respecting values, upsert-only writes, tenant-distributed rows, and an integration test proving determinism and idempotence.
+
 ### Release-readiness pass
 
 - Added explicit `restrict` / `cascade` / `setNull` relation semantics, deterministic PostgreSQL-safe constraint names, automatic foreign-key indexes, UTC `TIMESTAMPTZ(3)` columns, and Prisma/DDL parity tests.

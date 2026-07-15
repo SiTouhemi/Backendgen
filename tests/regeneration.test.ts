@@ -141,7 +141,7 @@ describe("safe regeneration", () => {
     await expect(readFile(customPath, "utf8")).resolves.toBe("// mine\n");
   });
 
-  it("warns when a schema change rewrites the existing migration", async () => {
+  it("emits an incremental migration for a schema change instead of rewriting history", async () => {
     await generate();
 
     const spec = scenarioSpec("basic-crud");
@@ -153,7 +153,7 @@ describe("safe regeneration", () => {
     if (!second.ok) return;
 
     expect(second.report.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("Migration prisma/migrations/")]),
+      expect.arrayContaining([expect.stringContaining("Added incremental migration")]),
     );
   });
 
@@ -204,18 +204,212 @@ describe("safe regeneration", () => {
     const stale = join(output, "src/generated/note/note.service.ts");
     await expect(readFile(stale, "utf8")).resolves.toContain("NoteService");
 
-    // Regenerate from a specification that no longer declares Note.
+    // Regenerate from a specification that no longer declares Note. Dropping a
+    // table is destructive, so it must be requested explicitly.
     const spec = scenarioSpec("basic-crud");
     spec.entities = {
       Task: { fields: { title: { type: "string", required: true } } },
     };
 
-    const second = await generateBackend({ spec, outputDirectory: output });
+    const refused = await generateBackend({ spec, outputDirectory: output });
+    expect(refused).toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.destructive-change" })],
+    });
+
+    const second = await generateBackend({
+      spec,
+      outputDirectory: output,
+      allowDestructive: true,
+    });
 
     expect(second.ok).toBe(true);
     if (!second.ok) return;
 
     expect(second.report.deleted).toContain("src/generated/note/note.service.ts");
     await expect(readFile(stale, "utf8")).rejects.toThrow();
+  });
+});
+
+describe("incremental migrations", () => {
+  const INIT = "prisma/migrations/00000000000000_init/migration.sql";
+  const FIRST = "prisma/migrations/00000000000001_backendgen/migration.sql";
+  const SECOND = "prisma/migrations/00000000000002_backendgen/migration.sql";
+  const SNAPSHOT = ".backendgen/schema-snapshot.json";
+
+  let output: string;
+
+  beforeEach(async () => {
+    output = await mkdtemp(join(tmpdir(), "backendgen-incremental-"));
+  });
+
+  afterEach(async () => {
+    await rm(output, { recursive: true, force: true });
+  });
+
+  function baseSpec() {
+    return scenarioSpec("basic-crud");
+  }
+
+  async function generate(spec = baseSpec(), options: { allowDestructive?: boolean } = {}) {
+    return generateBackend({ spec, outputDirectory: output, ...options });
+  }
+
+  it("records a versioned schema snapshot on the first generation", async () => {
+    const result = await generate();
+    expect(result.ok).toBe(true);
+
+    const snapshot = JSON.parse(await readFile(join(output, SNAPSHOT), "utf8")) as {
+      version: number;
+      tables: Array<{ name: string }>;
+    };
+    expect(snapshot.version).toBe(1);
+    expect(snapshot.tables.map((table) => table.name)).toContain("Note");
+  });
+
+  it("adds a nullable column incrementally and leaves the initial migration untouched", async () => {
+    await generate();
+    const initBefore = await readFile(join(output, INIT), "utf8");
+
+    const spec = baseSpec();
+    spec.entities.Note!.fields.priority = { type: "integer" };
+    const second = await generate(spec);
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+
+    const migration = await readFile(join(output, FIRST), "utf8");
+    expect(migration).toContain('ALTER TABLE "Note" ADD COLUMN "priority" INTEGER;');
+    expect(migration).not.toContain("NOT NULL");
+
+    await expect(readFile(join(output, INIT), "utf8")).resolves.toBe(initBefore);
+    expect(second.report.created).toContain(FIRST);
+  });
+
+  it("backfills a required column through its specification default", async () => {
+    await generate();
+
+    const spec = baseSpec();
+    spec.entities.Note!.fields.priority = { type: "integer", required: true, default: 3 };
+    const second = await generate(spec);
+
+    expect(second.ok).toBe(true);
+    const migration = await readFile(join(output, FIRST), "utf8");
+    expect(migration).toContain('ADD COLUMN "priority" INTEGER NOT NULL DEFAULT 3;');
+  });
+
+  it("refuses a required column that has no default to backfill with", async () => {
+    await generate();
+
+    const spec = baseSpec();
+    spec.entities.Note!.fields.priority = { type: "integer", required: true };
+
+    await expect(generate(spec)).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.not-null-requires-default" })],
+    });
+  });
+
+  it("refuses destructive changes unless explicitly allowed, then labels them", async () => {
+    await generate();
+
+    const spec = baseSpec();
+    delete spec.entities.Note!.fields.pinned;
+
+    await expect(generate(spec)).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.destructive-change" })],
+    });
+
+    const allowed = await generate(spec, { allowDestructive: true });
+    expect(allowed.ok).toBe(true);
+
+    const migration = await readFile(join(output, FIRST), "utf8");
+    expect(migration).toContain("-- DESTRUCTIVE:");
+    expect(migration).toContain('ALTER TABLE "Note" DROP COLUMN "pinned";');
+  });
+
+  it("creates a new table with its index and foreign key in one incremental migration", async () => {
+    await generate();
+
+    const spec = baseSpec();
+    spec.entities.Attachment = {
+      fields: { label: { type: "string", required: true } },
+      relations: [{ name: "note", type: "belongsTo", target: "Note", required: true }],
+    };
+    const second = await generate(spec);
+
+    expect(second.ok).toBe(true);
+    const migration = await readFile(join(output, FIRST), "utf8");
+    expect(migration).toContain('CREATE TABLE "Attachment"');
+    expect(migration).toContain('CREATE INDEX "Attachment_noteId_idx"');
+    expect(migration).toContain(
+      'FOREIGN KEY ("noteId") REFERENCES "Note"("id") ON DELETE RESTRICT',
+    );
+  });
+
+  it("keeps enum value additions in a trailing non-transactional section", async () => {
+    await generate();
+
+    const withEnum = baseSpec();
+    withEnum.entities.Note!.fields.status = {
+      type: "string",
+      required: true,
+      enum: ["OPEN", "DONE"],
+      default: "OPEN",
+    };
+    const second = await generate(withEnum);
+    expect(second.ok).toBe(true);
+    expect(await readFile(join(output, FIRST), "utf8")).toContain(
+      'CREATE TYPE "NoteStatus" AS ENUM',
+    );
+
+    const widened = structuredClone(withEnum);
+    widened.entities.Note!.fields.status = {
+      type: "string",
+      required: true,
+      enum: ["OPEN", "DONE", "ARCHIVED"],
+      default: "OPEN",
+    };
+    const third = await generate(widened);
+    expect(third.ok).toBe(true);
+
+    const migration = await readFile(join(output, SECOND), "utf8");
+    expect(migration).toContain("cannot run inside a transaction block");
+    expect(migration).toContain(`ALTER TYPE "NoteStatus" ADD VALUE 'ARCHIVED' AFTER 'DONE';`);
+  });
+
+  it("emits nothing when the specification is unchanged", async () => {
+    await generate();
+    const second = await generate();
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+
+    expect(second.report.changes.create).toBe(0);
+    expect(second.report.changes.update).toBe(0);
+    await expect(readFile(join(output, FIRST), "utf8")).rejects.toThrow();
+  });
+
+  it("emits byte-identical incremental migrations for identical changes", async () => {
+    const other = await mkdtemp(join(tmpdir(), "backendgen-incremental-b-"));
+    try {
+      const spec = baseSpec();
+      spec.entities.Note!.fields.priority = { type: "integer" };
+
+      await generate();
+      await generate(spec);
+
+      await generateBackend({ spec: baseSpec(), outputDirectory: other });
+      await generateBackend({ spec: structuredClone(spec), outputDirectory: other });
+
+      const [left, right] = await Promise.all([
+        readFile(join(output, FIRST), "utf8"),
+        readFile(join(other, FIRST), "utf8"),
+      ]);
+      expect(left).toBe(right);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
   });
 });
