@@ -21,6 +21,7 @@ interface CrudConfig {
   destructiveOrgRoles?: string[];
   defaultPageSize: number;
   maxPageSize: number;
+  seed?: { enabled?: boolean; rowsPerEntity?: number; organizations?: number };
 }
 
 function config(raw: Record<string, unknown>): CrudConfig {
@@ -97,6 +98,24 @@ export const crudFeature: FeaturePack = {
       },
       defaultPageSize: { type: "integer", minimum: 1, maximum: 200, default: 20 },
       maxPageSize: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+      seed: {
+        type: "object",
+        additionalProperties: false,
+        default: {},
+        description:
+          "Deterministic development seed (prisma/seed.ts + `npm run db:seed`). Identical on every machine; re-running is a no-op.",
+        properties: {
+          enabled: { type: "boolean", default: true },
+          rowsPerEntity: { type: "integer", minimum: 1, maximum: 100, default: 5 },
+          organizations: {
+            type: "integer",
+            minimum: 1,
+            maximum: 10,
+            default: 2,
+            description: "Tenants to create when the organizations feature is enabled.",
+          },
+        },
+      },
     },
   },
 

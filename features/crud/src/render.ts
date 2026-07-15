@@ -17,6 +17,7 @@ import {
   writableForeignKeys,
 } from "@backend-compiler/target-nestjs-prisma";
 import { sampleExpression } from "./samples.js";
+import { renderSeedFile, renderSeedTestFile } from "./seed.js";
 
 interface CrudSettings {
   adminRoles: string[];
@@ -1430,6 +1431,15 @@ export const crudRenderer: FeatureTargetRenderer = {
       );
     }
 
+    const seedFile = renderSeedFile(context);
+    const seedTestFile = renderSeedTestFile(context);
+    if (seedFile !== null) {
+      files.push(file("prisma/seed.ts", seedFile));
+    }
+    if (seedTestFile !== null) {
+      files.push(file("test/seed.e2e-spec.ts", seedTestFile));
+    }
+
     return {
       ...emptyRenderResult(),
       files,
@@ -1439,6 +1449,12 @@ export const crudRenderer: FeatureTargetRenderer = {
         kind: "module" as const,
         order: 100 + index,
       })),
+      ...(seedFile !== null
+        ? {
+            scripts: { "db:seed": "ts-node --transpile-only prisma/seed.ts" },
+            packageDevDependencies: { "ts-node": "10.9.2" },
+          }
+        : {}),
     };
   },
 };

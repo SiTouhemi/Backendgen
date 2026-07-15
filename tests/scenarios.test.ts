@@ -54,6 +54,33 @@ describe("scenarios", () => {
   });
 
   it.each(SCENARIOS.map((scenario) => scenario.name))(
+    "renders a deterministic, clock-free seed for '%s'",
+    (name) => {
+      const { rendered } = compile(name);
+      const seed = rendered.files.find((file) => file.path === "prisma/seed.ts");
+      const seedTest = rendered.files.find((file) => file.path === "test/seed.e2e-spec.ts");
+      const packageJson = JSON.parse(
+        rendered.files.find((file) => file.path === "package.json")!.contents,
+      ) as { scripts: Record<string, string>; devDependencies: Record<string, string> };
+
+      expect(seed).toBeDefined();
+      expect(seedTest).toBeDefined();
+      expect(packageJson.scripts["db:seed"]).toContain("prisma/seed.ts");
+      expect(packageJson.devDependencies["ts-node"]).toBe("10.9.2");
+
+      // Determinism: nothing in the seed may depend on the clock or randomness.
+      expect(seed!.contents).not.toContain("Date.now(");
+      expect(seed!.contents).not.toContain("Math.random");
+      expect(seed!.contents).not.toContain("randomUUID");
+      expect(seed!.contents).toContain("upsert");
+
+      // Two renders of the same specification emit byte-identical seeds.
+      const again = compile(name).rendered.files.find((file) => file.path === "prisma/seed.ts");
+      expect(again!.contents).toBe(seed!.contents);
+    },
+  );
+
+  it.each(SCENARIOS.map((scenario) => scenario.name))(
     "pins every direct generated dependency for '%s'",
     (name) => {
       const { rendered } = compile(name);
