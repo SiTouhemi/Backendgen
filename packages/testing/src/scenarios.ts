@@ -59,6 +59,23 @@ export const SCENARIOS: Scenario[] = [
     }),
   },
   {
+    name: "file-uploads",
+    description: "Owned notes with presigned attachment uploads to S3-compatible storage.",
+    needsDatabase: true,
+    spec: buildSpec({
+      name: "uploads-api",
+      description: "Notes with verified file attachments",
+      entities: { ...NOTE_ENTITY, ...USER_ENTITY },
+      features: {
+        crud: { ownedBy: { Note: "User" } },
+        auth: { roles: ["admin", "member"], emailVerification: false, passwordReset: false },
+        uploads: {
+          entities: { Note: { maxSizeMb: 5, allowedTypes: ["image/png", "image/jpeg"] } },
+        },
+      },
+    }),
+  },
+  {
     name: "background-jobs",
     description: "CRUD plus durable PostgreSQL-backed background jobs with a cron heartbeat.",
     needsDatabase: true,

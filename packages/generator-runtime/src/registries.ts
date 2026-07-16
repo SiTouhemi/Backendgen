@@ -5,6 +5,7 @@ import { jobsFeature } from "@backend-compiler/feature-jobs";
 import { notificationsFeature } from "@backend-compiler/feature-notifications";
 import { organizationsFeature } from "@backend-compiler/feature-organizations";
 import { reservationsFeature } from "@backend-compiler/feature-reservations";
+import { uploadsFeature } from "@backend-compiler/feature-uploads";
 import { nestjsPrismaTarget } from "@backend-compiler/target-nestjs-prisma";
 import type { TargetAdapter } from "@backend-compiler/target-sdk";
 
@@ -21,6 +22,7 @@ export function createDefaultRegistry(): FeatureRegistry {
     notificationsFeature,
     organizationsFeature,
     reservationsFeature,
+    uploadsFeature,
   ]);
 }
 

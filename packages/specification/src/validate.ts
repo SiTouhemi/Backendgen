@@ -161,9 +161,17 @@ function validateEntitySemantics(
     }
   }
 
+  // Implicit columns every entity carries; softDelete's deletedAt is feature
+  // configuration the specification layer cannot see, so it is not accepted here.
+  const implicitColumns = new Set(["id", "createdAt", "updatedAt"]);
+
   for (const [indexPosition, index] of (entity.indexes ?? []).entries()) {
     for (const fieldName of index.fields) {
-      if (!(fieldName in entity.fields) && !relationForeignKeys.has(fieldName)) {
+      if (
+        !(fieldName in entity.fields) &&
+        !relationForeignKeys.has(fieldName) &&
+        !implicitColumns.has(fieldName)
+      ) {
         issues.push({
           code: "semantic.unknown-index-field",
           path: `/entities/${name}/indexes/${indexPosition}/fields`,

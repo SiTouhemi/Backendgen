@@ -17,6 +17,7 @@
     { "path": "../../features/auth" },
     { "path": "../../features/crud" },
     { "path": "../../features/jobs" },
+    { "path": "../../features/uploads" },
     { "path": "../../features/notifications" },
     { "path": "../../features/organizations" },
     { "path": "../../features/reservations" }

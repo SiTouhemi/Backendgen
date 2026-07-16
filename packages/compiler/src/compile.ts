@@ -419,9 +419,14 @@ export function normalizeEntities(drafts: DraftEntity[]): NormalizedEntity[] {
     const fields = [...draft.fields].sort(byName).map(normalizeField);
     const entityRelations = relations.get(draft.name) ?? [];
 
+    // Every entity implicitly carries these columns; they are valid index fields.
+    const implicitColumns = new Set(["id", "createdAt", "updatedAt"]);
+    if (draft.softDelete) implicitColumns.add("deletedAt");
+
     for (const index of draft.indexes ?? []) {
       for (const fieldName of index.fields) {
-        const knownField = fields.some((field) => field.name === fieldName);
+        const knownField =
+          implicitColumns.has(fieldName) || fields.some((field) => field.name === fieldName);
         const knownForeignKey = entityRelations.some(
           (relation) => relation.foreignKey === fieldName,
         );

@@ -38,7 +38,7 @@ const TSCONFIG = `{
 
 const TSCONFIG_BUILD = `{
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "client", "**/*spec.ts"]
+  "exclude": ["node_modules", "test", "dist", "client", "prisma", "**/*spec.ts"]
 }
 `;
 

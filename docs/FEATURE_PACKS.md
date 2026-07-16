@@ -120,3 +120,33 @@ features:
       - name: nightly-cleanup
         schedule: "0 3 * * *"
 ```
+
+## uploads
+
+Presigned direct-to-storage uploads for any S3-compatible store (AWS S3,
+MinIO, R2) with **no SDK dependency** — SigV4 presigning is generated code,
+verified against the AWS documentation known-answer vector. Size and
+content-type limits are part of the signature, so the store itself rejects a
+non-conforming upload; `complete` additionally verifies the stored object
+server-side before anything becomes downloadable. Object keys are always
+server-chosen. Attachments inherit the parent entity''s tenant/ownership
+scoping; stale unfinished uploads are swept with their objects.
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `entities` | map entity → `{ maxSizeMb, allowedTypes }` | required | which entities accept attachments |
+| `presignTtlMinutes` | integer 1-60 | 15 | presigned URL lifetime |
+| `staleAfterMinutes` | integer 5-1440 | 60 | when unfinished uploads are swept |
+
+Flow: `POST /<parents>/:id/attachments` (declare fileName/contentType/size)
+→ PUT the bytes to the returned URL with the returned headers →
+`POST /<parent>-attachments/:id/complete` → `GET /<parent>-attachments/:id`
+for a download link. Env: `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+`S3_SECRET_ACCESS_KEY` (+ optional `S3_REGION`, `S3_FORCE_PATH_STYLE`).
+
+```yaml
+features:
+  uploads:
+    entities:
+      Note: { maxSizeMb: 5, allowedTypes: [image/png, image/jpeg] }
+```

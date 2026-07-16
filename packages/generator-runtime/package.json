@@ -15,6 +15,7 @@
     "@backend-compiler/feature-auth": "0.2.0",
     "@backend-compiler/feature-crud": "0.2.0",
     "@backend-compiler/feature-jobs": "0.2.0",
+    "@backend-compiler/feature-uploads": "0.2.0",
     "@backend-compiler/feature-notifications": "0.2.0",
     "@backend-compiler/feature-organizations": "0.2.0",
     "@backend-compiler/feature-reservations": "0.2.0",
