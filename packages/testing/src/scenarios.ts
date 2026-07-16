@@ -59,6 +59,20 @@ export const SCENARIOS: Scenario[] = [
     }),
   },
   {
+    name: "background-jobs",
+    description: "CRUD plus durable PostgreSQL-backed background jobs with a cron heartbeat.",
+    needsDatabase: true,
+    spec: buildSpec({
+      name: "jobs-api",
+      description: "Notes with durable background processing",
+      entities: NOTE_ENTITY,
+      features: {
+        crud: {},
+        jobs: { cron: [{ name: "heartbeat", schedule: "* * * * *" }] },
+      },
+    }),
+  },
+  {
     name: "authentication",
     description: "CRUD plus email and password authentication with rotating sessions.",
     needsDatabase: true,

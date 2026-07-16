@@ -1,4 +1,4 @@
-{
+﻿{
   "files": [],
   "references": [
     { "path": "packages/common" },
@@ -8,6 +8,7 @@
     { "path": "packages/feature-sdk" },
     { "path": "targets/nestjs-prisma" },
     { "path": "features/crud" },
+    { "path": "features/jobs" },
     { "path": "features/auth" },
     { "path": "features/organizations" },
     { "path": "features/reservations" },

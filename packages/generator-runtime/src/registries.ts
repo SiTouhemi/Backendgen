@@ -1,6 +1,7 @@
 import { FeatureRegistry } from "@backend-compiler/feature-sdk";
 import { authFeature } from "@backend-compiler/feature-auth";
 import { crudFeature } from "@backend-compiler/feature-crud";
+import { jobsFeature } from "@backend-compiler/feature-jobs";
 import { notificationsFeature } from "@backend-compiler/feature-notifications";
 import { organizationsFeature } from "@backend-compiler/feature-organizations";
 import { reservationsFeature } from "@backend-compiler/feature-reservations";
@@ -16,6 +17,7 @@ export function createDefaultRegistry(): FeatureRegistry {
   return new FeatureRegistry([
     authFeature,
     crudFeature,
+    jobsFeature,
     notificationsFeature,
     organizationsFeature,
     reservationsFeature,

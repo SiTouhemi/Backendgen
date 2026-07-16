@@ -1,4 +1,4 @@
-{
+﻿{
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
@@ -16,6 +16,7 @@
     { "path": "../../targets/nestjs-prisma" },
     { "path": "../../features/auth" },
     { "path": "../../features/crud" },
+    { "path": "../../features/jobs" },
     { "path": "../../features/notifications" },
     { "path": "../../features/organizations" },
     { "path": "../../features/reservations" }

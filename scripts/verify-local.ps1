@@ -4,6 +4,7 @@ param(
   [switch]$SkipUnit,
   [string[]]$Scenarios = @(
     "basic-crud",
+    "background-jobs",
     "authentication",
     "multi-tenant-saas",
     "hotel-reservation",

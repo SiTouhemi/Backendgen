@@ -583,7 +583,12 @@ function dispatcherFile(
 
   return `import { Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
-import { Prisma } from '@prisma/client';
+import {
+  QUEUE_BATCH_SIZE,
+  QUEUE_LEASE_MS,
+  queueClaimSql,
+  queueRetryDelayMs,
+} from '../common/queue-runner';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   NotificationDeliveryError,
@@ -593,9 +598,9 @@ import { NotificationService } from './notification.service';
 import { ${[...templates].sort().join(", ")} } from './templates';
 
 const MAX_ATTEMPTS = ${config.maxAttempts};
-const BATCH_SIZE = 10;
+const BATCH_SIZE = QUEUE_BATCH_SIZE;
 const MAX_BATCHES_PER_TICK = 10;
-const LEASE_MS = 2 * 60_000;
+const LEASE_MS = QUEUE_LEASE_MS;
 const DISPATCH_INTERVAL_MS = 5_000;
 const BASE_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 60 * 60_000;
@@ -647,7 +652,7 @@ function parsePayload(value: string | null): Record<string, unknown> {
 }
 
 function retryDelay(attempt: number): number {
-  return Math.min(BASE_BACKOFF_MS * 2 ** Math.max(0, attempt - 1), MAX_BACKOFF_MS);
+  return queueRetryDelayMs(attempt, BASE_BACKOFF_MS, MAX_BACKOFF_MS);
 }
 
 /**
@@ -708,16 +713,13 @@ export class NotificationOutboxDispatcher {
     const leaseUntil = new Date(Date.now() + LEASE_MS);
 
     return this.prisma.$transaction(async (tx) => {
-      const rows = await tx.$queryRaw<RawClaimedRow[]>(Prisma.sql\`
-        SELECT "id", "eventName", "payload", "attempts"
-        FROM "NotificationOutbox"
-        WHERE "status" = 'PENDING'
-          AND "nextAttemptAt" <= NOW()
-          AND ("lockedUntil" IS NULL OR "lockedUntil" <= NOW())
-        ORDER BY "nextAttemptAt" ASC, "createdAt" ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT \${BATCH_SIZE}
-      \`);
+      const rows = await tx.$queryRaw<RawClaimedRow[]>(
+        queueClaimSql(
+          'NotificationOutbox',
+          ['id', 'eventName', 'payload', 'attempts'],
+          BATCH_SIZE,
+        ),
+      );
 
       if (rows.length === 0) return [];
 

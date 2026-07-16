@@ -93,3 +93,30 @@ When auth enables verification or reset, those events are added automatically an
 ## Writing a new pack
 
 Features own domain rules; they must not bypass `BackendIR` or write files directly. A pack contributes entities and patches during compilation, endpoints and workflows to the IR, and pure render functions per target. Add conformance cases, focused semantic tests, deterministic rendering tests, and generated integration tests for every new behavior. See `packages/feature-sdk` for the contracts and any built-in pack for a template.
+
+## jobs
+
+Durable background jobs on PostgreSQL — no Redis or external queue. Creates
+the internal `JobRecord` entity. Enqueue transactionally with
+`JobService.enqueue(tx, name, payload, { runAt?, dedupeKey? })`; register
+handlers from `src/custom/jobs.ts` by providing `CUSTOM_JOB_HANDLERS` in
+`CustomModule`. Execution is leased (`FOR UPDATE SKIP LOCKED`), multi-instance
+safe, and at-least-once: handlers should be idempotent. Failures retry with
+persisted exponential backoff; throw `NonRetryableJobError` to fail
+immediately. Payloads are cleared in terminal states; DONE rows are deleted
+after `retentionDays`.
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `maxAttempts` | integer 1-10 | 5 | attempts before FAILED |
+| `pollIntervalMs` | integer 1000-60000 | 5000 | per-instance poll interval |
+| `retentionDays` | integer 1-365 | 7 | how long DONE rows are kept |
+| `cron` | `[{ name, schedule }]` | `[]` | five-field UTC cron; exactly one run per occurrence via dedupe keys |
+
+```yaml
+features:
+  jobs:
+    cron:
+      - name: nightly-cleanup
+        schedule: "0 3 * * *"
+```

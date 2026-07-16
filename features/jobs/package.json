@@ -1,5 +1,5 @@
-﻿{
-  "name": "@backend-compiler/generator-runtime",
+{
+  "name": "@backend-compiler/feature-jobs",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -12,14 +12,7 @@
   "dependencies": {
     "@backend-compiler/common": "0.2.0",
     "@backend-compiler/compiler": "0.1.0",
-    "@backend-compiler/feature-auth": "0.2.0",
-    "@backend-compiler/feature-crud": "0.2.0",
-    "@backend-compiler/feature-jobs": "0.2.0",
-    "@backend-compiler/feature-notifications": "0.2.0",
-    "@backend-compiler/feature-organizations": "0.2.0",
-    "@backend-compiler/feature-reservations": "0.2.0",
     "@backend-compiler/feature-sdk": "0.2.0",
-    "@backend-compiler/specification": "0.1.0",
     "@backend-compiler/target-nestjs-prisma": "0.2.0",
     "@backend-compiler/target-sdk": "0.2.0"
   }

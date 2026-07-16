@@ -356,6 +356,45 @@ export function ApiPaginatedResponse<TModel extends ClassRef<unknown>>(
 }
 `;
 
+const QUEUE_RUNNER = `import { Prisma } from '@prisma/client';
+
+/**
+ * Shared primitives for PostgreSQL-backed work queues (the notification
+ * outbox, background jobs). Claims use FOR UPDATE SKIP LOCKED so any number
+ * of instances poll concurrently without double-claiming a row.
+ */
+export const QUEUE_BATCH_SIZE = 10;
+export const QUEUE_LEASE_MS = 2 * 60_000;
+
+/** Bounded exponential backoff for a 1-based attempt counter. */
+export function queueRetryDelayMs(attempt: number, baseMs: number, maxMs: number): number {
+  return Math.min(baseMs * 2 ** Math.max(0, attempt - 1), maxMs);
+}
+
+/**
+ * SELECT ... FOR UPDATE SKIP LOCKED over a queue-shaped table (status,
+ * nextAttemptAt, lockedUntil, createdAt columns). Identifiers are generated
+ * constants, never user input.
+ */
+export function queueClaimSql(
+  tableName: string,
+  columns: readonly string[],
+  batchSize: number,
+): Prisma.Sql {
+  const selected = columns.map((column) => '"' + column + '"').join(', ');
+  return Prisma.sql\`
+    SELECT \${Prisma.raw(selected)}
+    FROM \${Prisma.raw('"' + tableName + '"')}
+    WHERE "status" = 'PENDING'
+      AND "nextAttemptAt" <= NOW()
+      AND ("lockedUntil" IS NULL OR "lockedUntil" <= NOW())
+    ORDER BY "nextAttemptAt" ASC, "createdAt" ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT \${batchSize}
+  \`;
+}
+`;
+
 const PUBLIC_DECORATOR = `import { SetMetadata } from '@nestjs/common';
 
 export const IS_PUBLIC_KEY = 'backendgen:isPublic';
@@ -944,6 +983,7 @@ export function projectFiles(context: TargetRenderContext): RenderedFile[] {
     generated("src/generated/common/api-error.dto.ts", API_ERROR),
     generated("src/generated/common/pagination.ts", PAGINATION),
     generated("src/generated/common/public.decorator.ts", PUBLIC_DECORATOR),
+    generated("src/generated/common/queue-runner.ts", QUEUE_RUNNER),
     generated("src/generated/config/environment.ts", environmentFile(context)),
     generated("src/generated/prisma/prisma.service.ts", PRISMA_SERVICE),
     generated("src/generated/prisma/prisma.module.ts", PRISMA_MODULE),
