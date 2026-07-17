@@ -25,6 +25,7 @@ import {
   type GenerationPlan,
 } from "./plan.js";
 import { createDefaultRegistry, createDefaultTargets, type TargetRegistry } from "./registries.js";
+import { findUnsafeOutputPaths } from "./safe-fs.js";
 import { renderBackend } from "./render.js";
 import type { FeatureRegistry } from "@backend-compiler/feature-sdk";
 
@@ -901,6 +902,23 @@ export async function generateBackend(options: GenerateOptions): Promise<Generat
   }
 
   await mkdir(outputDirectory, { recursive: true });
+
+  // A link planted inside the output directory could redirect a lexically safe
+  // relative path outside the root. Refuse before touching anything.
+  const touchedPaths = plan.files
+    .filter(
+      (file) =>
+        file.action === "create" || file.action === "update" || file.action === "delete",
+    )
+    .map((file) => file.path);
+  const unsafePaths = await findUnsafeOutputPaths(outputDirectory, [
+    ...touchedPaths,
+    MANIFEST_PATH,
+  ]);
+  if (unsafePaths.length > 0) {
+    return { ok: false, issues: unsafePaths };
+  }
+
   await writePlan(outputDirectory, plan, files);
 
   const manifestFiles: ManifestFile[] = files.map((file) => ({

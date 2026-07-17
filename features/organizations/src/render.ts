@@ -230,9 +230,17 @@ export type { MembershipRole };
 `;
 }
 
-function serviceFile(config: OrganizationsConfig, userEntity: string): string {
+function serviceFile(
+  config: OrganizationsConfig,
+  userEntity: string,
+  userSoftDelete: boolean,
+): string {
   const delegate = names.delegate(userEntity);
   const admins = config.roles.slice(0, Math.max(1, config.roles.length - 1));
+  // A soft-deleted account must not count as an active member or owner: the
+  // active-owner invariant is about accounts that can still sign in.
+  const activeUserFilter = userSoftDelete ? ", user: { deletedAt: null }" : "";
+  const activeAccountFilter = userSoftDelete ? ", deletedAt: null" : "";
 
   return `import {
   ConflictException,
@@ -319,7 +327,7 @@ export class OrganizationService {
     await this.requireMembership(organizationId, userId);
 
     const members = await this.prisma.membership.findMany({
-      where: { organizationId },
+      where: { organizationId${activeUserFilter} },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -333,8 +341,8 @@ export class OrganizationService {
   ): Promise<MemberDto> {
     await this.requireAdmin(organizationId, actorId);
 
-    const account = await this.prisma.${delegate}.findUnique({
-      where: { email: dto.email.trim().toLowerCase() },
+    const account = await this.prisma.${delegate}.findFirst({
+      where: { email: dto.email.trim().toLowerCase()${activeAccountFilter} },
     });
 
     if (account === null) {
@@ -370,16 +378,16 @@ export class OrganizationService {
 
     const updated = await this.serializable(async (tx) => {
       const membership = await tx.membership.findFirst({
-        where: { organizationId, userId },
+        where: { organizationId, userId },${userSoftDelete ? "\n        include: { user: { select: { deletedAt: true } } }," : ""}
       });
 
       if (membership === null) {
         throw new NotFoundException('Membership not found');
       }
 
-      if (membership.role === OWNER_ROLE && dto.role !== OWNER_ROLE) {
+      if (${userSoftDelete ? "membership.user.deletedAt === null && " : ""}membership.role === OWNER_ROLE && dto.role !== OWNER_ROLE) {
         const owners = await tx.membership.count({
-          where: { organizationId, role: OWNER_ROLE as never },
+          where: { organizationId, role: OWNER_ROLE as never${activeUserFilter} },
         });
 
         if (owners <= 1) {
@@ -401,16 +409,16 @@ export class OrganizationService {
 
     await this.serializable(async (tx) => {
       const membership = await tx.membership.findFirst({
-        where: { organizationId, userId },
+        where: { organizationId, userId },${userSoftDelete ? "\n        include: { user: { select: { deletedAt: true } } }," : ""}
       });
 
       if (membership === null) {
         throw new NotFoundException('Membership not found');
       }
 
-      if (membership.role === OWNER_ROLE) {
+      if (${userSoftDelete ? "membership.user.deletedAt === null && " : ""}membership.role === OWNER_ROLE) {
         const owners = await tx.membership.count({
-          where: { organizationId, role: OWNER_ROLE as never },
+          where: { organizationId, role: OWNER_ROLE as never${activeUserFilter} },
         });
 
         if (owners <= 1) {
@@ -424,7 +432,7 @@ export class OrganizationService {
 
   private async requireMembership(organizationId: string, userId: string): Promise<string> {
     const membership = await this.prisma.membership.findFirst({
-      where: { organizationId, userId },
+      where: { organizationId, userId${activeUserFilter} },
       select: { role: true },
     });
 
@@ -583,10 +591,53 @@ import { OrganizationService } from './organization.service';
 export class OrganizationModule {}
 `;
 
-function serviceSpec(userEntity: string): string {
-  const delegate = names.delegate(userEntity);
+function serviceSpec(config: OrganizationsConfig, userSoftDelete: boolean): string {
+  const delegate = names.delegate(config.userEntity);
+  const owner = ownerRole(config);
+  const admins = config.roles.slice(0, Math.max(1, config.roles.length - 1));
+  // Role strings that are guaranteed to be non-admin / non-owner even for a
+  // single-role configuration; the service never validates them against the enum.
+  const nonAdmin = config.roles.find((role) => !admins.includes(role)) ?? "not-an-admin-role";
+  const member = config.roles.find((role) => role !== owner) ?? "not-the-owner-role";
+  const activeUserFilter = userSoftDelete ? ", user: { deletedAt: null }" : "";
 
-  return `import { ForbiddenException } from '@nestjs/common';
+  const softDeleteTests = userSoftDelete
+    ? `
+  it('refuses to add a soft-deleted account as a member', async () => {
+    prisma.membership.findFirst.mockResolvedValue({ role: '${owner}' });
+    prisma.${delegate}.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.addMember('org-1', { email: 'ghost@example.test' }, 'acting-admin'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.${delegate}.findFirst).toHaveBeenCalledWith({
+      where: { email: 'ghost@example.test', deletedAt: null },
+    });
+  });
+
+  it('allows demoting a soft-deleted owner without counting it as active', async () => {
+    prisma.membership.findFirst
+      .mockResolvedValueOnce({ role: '${owner}' })
+      .mockResolvedValueOnce({
+        id: 'membership-1',
+        role: '${owner}',
+        user: { deletedAt: new Date() },
+      });
+    prisma.membership.update.mockResolvedValue({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      role: '${member}',
+      createdAt: new Date(),
+    });
+    prisma.$transaction.mockImplementation(async (work) => work(prisma));
+
+    await service.updateMember('org-1', 'user-1', { role: '${member}' }, 'acting-admin');
+    expect(prisma.membership.count).not.toHaveBeenCalled();
+  });
+`
+    : "";
+
+  return `import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationService } from './organization.service';
@@ -602,7 +653,7 @@ describe('OrganizationService', () => {
       delete: jest.fn(),
       count: jest.fn(),
     },
-    ${delegate}: { findUnique: jest.fn() },
+    ${delegate}: { findFirst: jest.fn() },
     $transaction: jest.fn(),
   };
 
@@ -628,13 +679,42 @@ describe('OrganizationService', () => {
   });
 
   it('refuses to add a member without an administrative organization role', async () => {
-    prisma.membership.findFirst.mockResolvedValue({ role: 'member' });
+    prisma.membership.findFirst.mockResolvedValue({ role: '${nonAdmin}' });
 
     await expect(
       service.addMember('org-1', { email: 'new@example.test' }, 'plain-member'),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
-});
+
+  it('refuses to demote the last active ${owner}', async () => {
+    prisma.membership.findFirst
+      .mockResolvedValueOnce({ role: '${owner}' })
+      .mockResolvedValueOnce({ id: 'membership-1', role: '${owner}'${userSoftDelete ? ", user: { deletedAt: null }" : ""} });
+    prisma.membership.count.mockResolvedValue(1);
+    prisma.$transaction.mockImplementation(async (work) => work(prisma));
+
+    await expect(
+      service.updateMember('org-1', 'user-1', { role: '${member}' }, 'acting-admin'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.membership.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', role: '${owner}'${activeUserFilter} },
+    });
+    expect(prisma.membership.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to remove the last active ${owner}', async () => {
+    prisma.membership.findFirst
+      .mockResolvedValueOnce({ role: '${owner}' })
+      .mockResolvedValueOnce({ id: 'membership-1', role: '${owner}'${userSoftDelete ? ", user: { deletedAt: null }" : ""} });
+    prisma.membership.count.mockResolvedValue(1);
+    prisma.$transaction.mockImplementation(async (work) => work(prisma));
+
+    await expect(
+      service.removeMember('org-1', 'user-1', 'acting-admin'),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.membership.delete).not.toHaveBeenCalled();
+  });
+${softDeleteTests}});
 `;
 }
 
@@ -887,6 +967,7 @@ describe('Tenant isolation (e2e)', () => {
 export const organizationsRenderer: FeatureTargetRenderer = {
   render(context: TargetRenderContext): RenderResult {
     const config = organizationsConfig(context.config);
+    const userSoftDelete = context.entity(config.userEntity)?.softDelete === true;
 
     const files: RenderedFile[] = [
       file(
@@ -896,10 +977,10 @@ export const organizationsRenderer: FeatureTargetRenderer = {
       file("src/generated/organizations/guards/organization-roles.guard.ts", ORG_ROLES_GUARD),
       file("src/generated/organizations/decorators/org-roles.decorator.ts", ORG_ROLES_DECORATOR),
       file("src/generated/organizations/dto/organization.dto.ts", dtoFile(config)),
-      file("src/generated/organizations/organization.service.ts", serviceFile(config, config.userEntity)),
+      file("src/generated/organizations/organization.service.ts", serviceFile(config, config.userEntity, userSoftDelete)),
       file("src/generated/organizations/organization.controller.ts", controllerFile()),
       file("src/generated/organizations/organization.module.ts", ORG_MODULE),
-      file("src/generated/organizations/organization.service.spec.ts", serviceSpec(config.userEntity)),
+      file("src/generated/organizations/organization.service.spec.ts", serviceSpec(config, userSoftDelete)),
       file("test/organizations.e2e-spec.ts", organizationsE2e(context)),
       file("test/tenant-isolation.e2e-spec.ts", isolationE2e(context)),
     ];
