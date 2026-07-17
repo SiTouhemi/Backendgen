@@ -155,7 +155,13 @@ export const jobsFeature: FeaturePack = {
           origin: "feature",
           ownerFeature: "jobs",
           fields: [
-            { name: "name", type: "string", required: true, internal: true },
+            {
+              name: "name",
+              type: "string",
+              required: true,
+              maxLength: 64,
+              internal: true,
+            },
             {
               name: "payload",
               type: "text",
@@ -184,6 +190,7 @@ export const jobsFeature: FeaturePack = {
               name: "dedupeKey",
               type: "string",
               required: false,
+              maxLength: 256,
               internal: true,
               description:
                 "Optional idempotency key. Two enqueues of the same (name, dedupeKey) yield one job.",

@@ -50,6 +50,78 @@ Enum additions (`ALTER TYPE … ADD VALUE`) are emitted in their own trailing
 section: they cannot run inside a transaction block with other DDL on older
 PostgreSQL versions.
 
+## Manual migrations and `--accept-manual`
+
+Some transitions cannot be generated safely and fail closed until a person
+writes the SQL:
+
+| Refusal | Meaning |
+|---|---|
+| `migrate.not-null-backfill-required` | making an existing column required needs a data backfill before `SET NOT NULL` |
+| `migrate.not-null-requires-default` | a new required column has no default to backfill existing rows with (fixable in the specification, or manually) |
+| `migrate.feature-sql-change-unsupported` | feature-owned raw SQL was removed or replaced |
+| `migrate.enum-change-unsupported` | an enum was removed, reordered, or changed anywhere except its tail |
+
+The completion workflow records a reviewed, hand-written migration as
+implementing the whole pending transition, then advances the snapshot so
+regeneration stops refusing:
+
+```sh
+# 1. Change backend.yaml (say Note.pinned goes from optional to required).
+#    Generation now refuses with migrate.not-null-backfill-required.
+backendgen generate backend.yaml --output ./my-api
+
+# 2. Write the migration by hand, in a new timestamped directory that sorts
+#    after every existing migration:
+mkdir -p my-api/prisma/migrations/20260717120000_backfill_pinned
+cat > my-api/prisma/migrations/20260717120000_backfill_pinned/migration.sql <<'SQL'
+UPDATE "Note" SET "pinned" = false WHERE "pinned" IS NULL;
+ALTER TABLE "Note" ALTER COLUMN "pinned" SET NOT NULL;
+SQL
+
+# 3. Apply it (development: prisma migrate deploy; production: your normal
+#    reviewed rollout).
+cd my-api && npx prisma migrate deploy && cd ..
+
+# 4. Tell the generator that this migration implements the pending transition:
+backendgen generate backend.yaml --output ./my-api \
+  --accept-manual 20260717120000_backfill_pinned
+```
+
+Acceptance validates before it trusts: the directory must exist with a
+non-empty `migration.sql`, must not be generator-owned (`*_backendgen`) or
+already recorded, must sort after all recorded history, and must mention every
+table, column, and enum the pending diff touches (`migrate.accept-incomplete`
+lists anything missing). Only then does the snapshot advance — no automatic
+migration is emitted, the migration's SHA-256 is recorded in the manifest and
+in `.backendgen/accepted-migrations.json` together with the snapshot hashes it
+bridges.
+
+From that point the accepted file is immutable history: editing it fails
+`migrate.history-modified`, deleting it fails `migrate.history-missing`, and
+tampering with the acceptance record fails
+`migrate.accepted-record-modified` — all fail closed even with `--force`.
+Restore such files from version control. `backendgen diff --accept-manual …`
+previews an acceptance without writing anything.
+
+`--accept-manual` is deliberately narrow. It never bypasses validation of
+history, and it is not an "ignore migration safety" switch: it always names one
+reviewed migration and one pending transition.
+
+In production, run step 3 with your normal migration rollout (backup, rehearse
+on a clone, deploy) **before** accepting: acceptance asserts that the database
+transition has been handled.
+
+## Recovery after an interrupted generation
+
+Generation writes the manifest last. If a run is interrupted after files were
+written but before the manifest, the next run fails closed (typically
+`migrate.snapshot-modified` or `generate.untracked-file`) instead of guessing.
+Restore the generated project's `.backendgen/` directory and
+`prisma/migrations/` from version control (`git checkout -- .backendgen prisma/migrations`)
+and regenerate. Committing every generated project after each successful
+generation is what makes this recovery trivial.
+
 ## Development shortcut
 
 While iterating with a database you do not care about, `npx prisma migrate

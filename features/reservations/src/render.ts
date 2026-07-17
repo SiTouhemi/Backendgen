@@ -257,6 +257,7 @@ function serviceFile(
   const notifyCancelled = hasNotificationEvent(context, "reservation_cancelled");
   const notifyExpired = hasNotificationEvent(context, "reservation_expired");
   const usesOutbox = notifyCreated || notifyConfirmed || notifyCancelled || notifyExpired;
+  const usesWebhookOutbox = context.hasFeature("webhooks");
   const crud = context.featureConfig("crud") as { adminRoles?: unknown } | undefined;
   const auth = context.featureConfig("auth") as
     | { roles?: string[]; defaultRole?: string }
@@ -294,7 +295,11 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, ${statusEnum} } from '@prisma/client';
 import { Page, toPage } from '../common/pagination';
 import { ${scopeImports.sort().join(", ")} } from '../common/scope';
-${usesOutbox ? "import { enqueueNotification } from '../notifications/outbox';\n" : ""}import { PrismaService } from '../prisma/prisma.service';
+${usesOutbox ? "import { enqueueNotification } from '../notifications/outbox';\n" : ""}${
+    usesWebhookOutbox
+      ? "import { enqueueWebhookEvent } from '../webhooks/webhook-outbox';\n"
+      : ""
+  }import { PrismaService } from '../prisma/prisma.service';
 import {
   Availability${model}QueryDto,
   AvailabilityDto,
@@ -459,6 +464,29 @@ ${
         });
 `
     : ""
+}${
+  usesWebhookOutbox
+    ? `        await enqueueWebhookEvent(tx, 'reservation.created', {
+          reservationId: reservation.id,
+          resourceId: reservation.resourceId,
+          ownerId: reservation.ownerId,
+          status: reservation.status,
+          startsAt: reservation.startsAt.toISOString(),
+          endsAt: reservation.endsAt.toISOString(),
+        }${tenant ? ", reservation.organizationId" : ""});
+${
+  holds
+    ? ""
+    : `        await enqueueWebhookEvent(tx, 'reservation.confirmed', {
+          reservationId: reservation.id,
+          resourceId: reservation.resourceId,
+          ownerId: reservation.ownerId,
+          startsAt: reservation.startsAt.toISOString(),
+          endsAt: reservation.endsAt.toISOString(),
+        }${tenant ? ", reservation.organizationId" : ""});
+`
+}`
+    : ""
 }        return reservation;
       });
 
@@ -615,6 +643,14 @@ ${
 `
     : ""
 }
+${usesWebhookOutbox ? `      await enqueueWebhookEvent(tx, 'reservation.confirmed', {
+        reservationId: row.id,
+        resourceId: row.resourceId,
+        ownerId: row.ownerId,
+        startsAt: row.startsAt.toISOString(),
+        endsAt: row.endsAt.toISOString(),
+      }${tenant ? ", row.organizationId" : ""});
+` : ""}
       return row;
     });
 
@@ -666,6 +702,12 @@ ${
 `
     : ""
 }
+${usesWebhookOutbox ? `      await enqueueWebhookEvent(tx, 'reservation.cancelled', {
+        reservationId: row.id,
+        resourceId: row.resourceId,
+        ownerId: row.ownerId,
+      }${tenant ? ", row.organizationId" : ""});
+` : ""}
       return row;
     });
 
@@ -715,7 +757,11 @@ ${
             holdExpiresAt: { lte: now },
           },
           data: { status: 'EXPIRED', holdExpiresAt: null },
-          select: { id: true, resourceId: true, ownerId: true },
+          select: {
+            id: true,
+            resourceId: true,
+            ownerId: true,${tenant ? "\n            organizationId: true," : ""}
+          },
         });
 
 ${
@@ -730,6 +776,14 @@ ${
 `
     : ""
 }
+${usesWebhookOutbox ? `        for (const row of rows) {
+          await enqueueWebhookEvent(tx, 'reservation.expired', {
+            reservationId: row.id,
+            resourceId: row.resourceId,
+            ownerId: row.ownerId,
+          }${tenant ? ", row.organizationId" : ""});
+        }
+` : ""}
 
         return { candidates: candidates.length, rows };
       });

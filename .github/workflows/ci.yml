@@ -31,6 +31,10 @@ jobs:
       matrix:
         scenario:
           - basic-crud
+          - file-uploads
+          - webhooks
+          - webhooks-multitenant
+          - background-jobs
           - authentication
           - multi-tenant-saas
           - hotel-reservation

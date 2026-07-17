@@ -2,7 +2,7 @@ import { issue, type Issue } from "@backend-compiler/common";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, sep } from "node:path";
 import type { FileOwnership, RenderedFile } from "@backend-compiler/target-sdk";
-import { hashContents, MANIFEST_DIRECTORY, type GenerationManifest } from "./manifest.js";
+import { hashContents, MANIFEST_PATH, type GenerationManifest } from "./manifest.js";
 
 export type FileAction = "create" | "update" | "unchanged" | "delete" | "preserve";
 
@@ -109,6 +109,13 @@ export async function planGeneration(input: {
     const currentHash = hashContents(existing);
 
     if (entry === undefined) {
+      // Byte-identical content is not a conflict: adopt the file into the
+      // manifest. This is how an accepted manual migration, whose contents the
+      // runtime re-renders verbatim, becomes tracked without --force.
+      if (currentHash === hashContents(file.contents)) {
+        planned.push({ path: file.path, action: "unchanged", ownership: file.ownership });
+        continue;
+      }
       if (force) {
         warnings.push(`Overwriting untracked file at a generated path: ${file.path}`);
         planned.push({ path: file.path, action: "update", ownership: file.ownership });
@@ -181,8 +188,8 @@ export async function planGeneration(input: {
     planned.push({ path: entry.path, action: "delete", ownership: entry.ownership });
   }
 
-  if (planned.some((file) => file.path.startsWith(`${MANIFEST_DIRECTORY}/`))) {
-    warnings.push("A renderer produced a file inside the manifest directory; it will be ignored.");
+  if (planned.some((file) => file.path === MANIFEST_PATH)) {
+    warnings.push("A renderer produced the reserved generation manifest path; it will be ignored.");
   }
 
   return {

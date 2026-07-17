@@ -1,0 +1,85 @@
+# The full-feature proof specification: every supported feature pack at once.
+# This is the exact input for the retained proof project under
+# generated/all-features-proof-20260717. Regenerate it with:
+#
+#   backendgen generate examples/all-features/backend.yaml --output <dir>
+#
+# A second generation into the same directory must report no changes.
+specVersion: backendcompiler.dev/v1
+
+project:
+  name: everything-api
+  description: All features combined
+
+target:
+  id: nestjs-prisma
+  database: postgresql
+
+entities:
+  User:
+    fields:
+      displayName:
+        type: string
+        required: true
+        minLength: 2
+        maxLength: 100
+
+  Venue:
+    fields:
+      name:
+        type: string
+        required: true
+        maxLength: 200
+
+  Desk:
+    fields:
+      label:
+        type: string
+        required: true
+        maxLength: 60
+      seats:
+        type: integer
+        required: true
+        minimum: 1
+    relations:
+      - name: venue
+        type: belongsTo
+        target: Venue
+        required: true
+
+features:
+  crud:
+    softDelete: [Desk, User]
+
+  auth:
+    roles: [admin, member]
+    emailVerification: true
+    passwordReset: true
+
+  organizations:
+    roles: [owner, admin, member]
+
+  reservations:
+    resource: Desk
+    owner: User
+    holdMinutes: 10
+
+  notifications:
+    provider: resend
+    events: [user_registered, reservation_confirmed, reservation_cancelled]
+
+  webhooks:
+    maxAttempts: 3
+    disableAfterFailures: 2
+
+  jobs:
+    cron:
+      - name: heartbeat
+        schedule: "*/5 * * * *"
+
+  uploads:
+    entities:
+      Desk:
+        maxSizeMb: 8
+        allowedTypes: [image/png, image/jpeg, application/pdf]
+    staleAfterMinutes: 60

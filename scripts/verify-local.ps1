@@ -5,6 +5,8 @@ param(
   [string[]]$Scenarios = @(
     "basic-crud",
     "file-uploads",
+    "webhooks",
+    "webhooks-multitenant",
     "background-jobs",
     "authentication",
     "multi-tenant-saas",

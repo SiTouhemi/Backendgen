@@ -106,6 +106,12 @@ persisted exponential backoff; throw `NonRetryableJobError` to fail
 immediately. Payloads are cleared in terminal states; DONE rows are deleted
 after `retentionDays`.
 
+The claim lease is fixed at two minutes and is **not renewed** while a handler
+runs. A handler that runs longer than the lease can be claimed again by
+another instance and executed concurrently — keep handlers short (well under
+two minutes) or make them explicitly safe under concurrent duplicate
+execution; the attempt counter is consumed at claim time either way.
+
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `maxAttempts` | integer 1-10 | 5 | attempts before FAILED |
@@ -123,14 +129,29 @@ features:
 
 ## uploads
 
-Presigned direct-to-storage uploads for any S3-compatible store (AWS S3,
-MinIO, R2) with **no SDK dependency** — SigV4 presigning is generated code,
-verified against the AWS documentation known-answer vector. Size and
-content-type limits are part of the signature, so the store itself rejects a
-non-conforming upload; `complete` additionally verifies the stored object
-server-side before anything becomes downloadable. Object keys are always
-server-chosen. Attachments inherit the parent entity''s tenant/ownership
-scoping; stale unfinished uploads are swept with their objects.
+Presigned direct-to-storage uploads for S3-compatible stores with **no SDK
+dependency** — SigV4 presigning is generated code, verified against the AWS
+documentation known-answer vector and exercised end-to-end against MinIO.
+Size and content-type limits are part of the signature, so the store itself
+rejects a non-conforming upload; `complete` additionally verifies the stored
+object server-side before anything becomes downloadable. Object keys are
+always server-chosen. Attachments inherit the parent entity''s
+tenant/ownership scoping; stale unfinished uploads are swept with their
+objects.
+
+Compatibility requirements for the store: SigV4 presigned URLs and the
+`If-None-Match: *` conditional header on PUT (it keeps completed objects
+immutable while their upload URL is still valid). AWS S3 documents both;
+MinIO is what the generated integration flow is actually tested against.
+Verify other S3-compatible providers before relying on them. Credentials are
+static keys only — session tokens, instance metadata, and workload identity
+are not implemented. The `mock` provider is refused outside `NODE_ENV=test`.
+
+Local development needs no external account: the generated
+`docker-compose.yml` runs MinIO with a health check and a one-shot bucket
+bootstrap, and `.env.example` ships matching `S3_*` defaults, so
+`docker compose up -d postgres minio minio-init` gives a working uploads
+stack.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|

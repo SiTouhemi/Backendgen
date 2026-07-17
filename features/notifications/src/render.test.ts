@@ -45,6 +45,10 @@ describe("notifications renderer", () => {
       result,
       "src/generated/notifications/notification.module.ts",
     );
+    const dispatcher = contents(
+      result,
+      "src/generated/notifications/notification.dispatcher.ts",
+    );
 
     expect(integration).toContain("const provider = new MockNotificationProvider()");
     expect(integration).toContain("await prisma.$connect()");
@@ -53,6 +57,9 @@ describe("notifications renderer", () => {
     expect(integration).toContain("status: 'DELIVERED'");
     expect(integration).toContain("payload: null");
     expect(integration).toContain("lastError: 'unsupported-event'");
+    expect(dispatcher).toContain("attempts: { increment: 1 }");
+    expect(dispatcher).toContain("row.attempts >= MAX_ATTEMPTS");
+    expect(dispatcher).toContain("const attempt = row.attempts;");
     expect(module).toContain("selected === 'mock' && process.env.NODE_ENV !== 'test'");
     expect(module).toContain("mock notification provider is only allowed");
   });
@@ -86,9 +93,15 @@ describe("notifications renderer", () => {
   it("escapes configured senders and refuses a log override for recovery", () => {
     const result = renderForUser(false, true, "O'Brien <mail@example.com>");
     const module = contents(result, "src/generated/notifications/notification.module.ts");
+    const provider = contents(
+      result,
+      "src/generated/notifications/providers/resend.provider.ts",
+    );
 
     expect(module).toContain(`const DEFAULT_FROM = "O'Brien <mail@example.com>";`);
     expect(module).toContain("selected === 'log' && RECOVERY_DELIVERY_REQUIRED");
     expect(module).toContain("log notification provider cannot deliver account-recovery links");
+    expect(provider).toContain("response.status === 408");
+    expect(provider).toContain("response.status === 425");
   });
 });

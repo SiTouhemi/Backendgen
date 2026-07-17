@@ -76,6 +76,42 @@ export const SCENARIOS: Scenario[] = [
     }),
   },
   {
+    name: "webhooks",
+    description: "CRUD plus auth plus outbound signed webhooks with SSRF-guarded destinations.",
+    needsDatabase: true,
+    spec: buildSpec({
+      name: "webhooks-api",
+      description: "Notes with outbound webhooks",
+      entities: { ...NOTE_ENTITY, ...USER_ENTITY },
+      features: {
+        crud: {},
+        auth: { roles: ["admin", "member"], emailVerification: false, passwordReset: false },
+        webhooks: { maxAttempts: 2, disableAfterFailures: 1 },
+      },
+    }),
+  },
+  {
+    name: "webhooks-multitenant",
+    description:
+      "Organization-scoped webhook administration and tenant-isolated event fan-out.",
+    needsDatabase: true,
+    spec: buildSpec({
+      name: "tenant-webhooks-api",
+      description: "Tenant notes with isolated outbound webhooks",
+      entities: { ...NOTE_ENTITY, ...USER_ENTITY },
+      features: {
+        crud: {},
+        auth: { roles: ["admin", "member"], emailVerification: false, passwordReset: false },
+        organizations: {
+          scopedEntities: ["Note"],
+          roles: ["owner", "member"],
+          defaultRole: "member",
+        },
+        webhooks: { maxAttempts: 2, disableAfterFailures: 1 },
+      },
+    }),
+  },
+  {
     name: "background-jobs",
     description: "CRUD plus durable PostgreSQL-backed background jobs with a cron heartbeat.",
     needsDatabase: true,
@@ -240,6 +276,16 @@ export const SCENARIOS: Scenario[] = [
         auth: { roles: ["admin", "member"] },
         organizations: { roles: ["owner", "admin", "member"] },
         reservations: { resource: "Desk", owner: "User", holdMinutes: 10 },
+        uploads: {
+          entities: {
+            Desk: {
+              maxSizeMb: 8,
+              allowedTypes: ["image/png", "image/jpeg", "application/pdf"],
+            },
+          },
+        },
+        jobs: { cron: [{ name: "heartbeat", schedule: "*/5 * * * *" }] },
+        webhooks: { maxAttempts: 3, disableAfterFailures: 2 },
         notifications: {
           provider: "resend",
           events: ["user_registered", "reservation_confirmed", "reservation_cancelled"],

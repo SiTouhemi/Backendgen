@@ -87,6 +87,15 @@ export const uploadsFeature: FeaturePack = {
     const config = uploadsConfig(context.config);
     const issues: Array<{ code: string; path: string; message: string }> = [];
 
+    if (config.staleAfterMinutes < config.presignTtlMinutes) {
+      issues.push({
+        code: "feature.uploads.stale-before-presign-expiry",
+        path: "/features/uploads/staleAfterMinutes",
+        message:
+          "staleAfterMinutes must be greater than or equal to presignTtlMinutes so cleanup cannot run while an upload URL is still valid.",
+      });
+    }
+
     for (const entity of Object.keys(config.entities ?? {})) {
       if (!context.specEntities.includes(entity)) {
         issues.push({
@@ -126,14 +135,16 @@ export const uploadsFeature: FeaturePack = {
             name: "status",
             type: "string",
             required: true,
-            enumValues: ["UPLOADING", "READY"],
+            enumValues: ["UPLOADING", "READY", "DELETING"],
             defaultValue: "UPLOADING",
             internal: true,
           },
         ],
         relations: [
-          // Attachments are derived content: they disappear with their parent row.
-          { name: "parent", type: "belongsTo", target: parent, required: true, onDelete: "cascade" },
+          // A database cascade cannot remove the corresponding object. Refuse
+          // parent deletion until attachments have gone through the storage-aware
+          // DELETE endpoint instead of silently orphaning bytes.
+          { name: "parent", type: "belongsTo", target: parent, required: true, onDelete: "restrict" },
         ],
         indexes: [{ fields: ["status", "createdAt"], unique: false }],
       }));
@@ -144,12 +155,37 @@ export const uploadsFeature: FeaturePack = {
   contribute(context: FeatureContext): FeatureContribution {
     const config = uploadsConfig(context.config);
     const parents = Object.keys(config.entities ?? {}).sort();
-    const auth = context.featureConfig("auth") !== undefined ? ("authenticated" as const) : ("public" as const);
+    const authConfig = context.featureConfig("auth") as
+      | { roles?: string[]; defaultRole?: string; userEntity?: string }
+      | undefined;
+    const auth = authConfig !== undefined ? ("authenticated" as const) : ("public" as const);
+    const crud = context.featureConfig("crud") as
+      | { adminRoles?: string[]; destructiveRoles?: string[]; destructiveOrgRoles?: string[] }
+      | undefined;
+    const organizations = context.featureConfig("organizations") as
+      | { roles?: string[] }
+      | undefined;
+    const accountRoles = authConfig?.roles ?? ["admin", "user"];
+    const registrationRole = authConfig?.defaultRole ?? accountRoles.at(-1) ?? "user";
+    const adminRoles =
+      crud?.adminRoles ?? accountRoles.filter((role) => role !== registrationRole).slice(0, 1);
+    const organizationRoles = organizations?.roles ?? ["owner", "admin", "member"];
 
     return {
       endpoints: parents.flatMap((parent) => {
+        const entity = context.entity(parent);
+        const authUserEntity = authConfig?.userEntity ?? "User";
+        const callerOwned = entity.ownership !== null ||
+          (authConfig !== undefined && entity.name === authUserEntity);
         const attachment = attachmentEntityName(parent);
         const attachmentRoute = names.route(attachment);
+        const destructiveRoles =
+          entity.tenant !== null && organizations !== undefined
+            ? (crud?.destructiveOrgRoles ??
+              organizationRoles.slice(0, Math.max(1, organizationRoles.length - 1)))
+            : authConfig !== undefined && !callerOwned
+              ? (crud?.destructiveRoles ?? adminRoles)
+              : [];
         return [
           {
             id: `${attachment}.create`,
@@ -193,7 +229,7 @@ export const uploadsFeature: FeaturePack = {
             operation: "delete",
             summary: "Delete an attachment and its stored object",
             auth,
-            roles: [],
+            roles: destructiveRoles,
           },
         ];
       }),

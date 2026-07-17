@@ -101,13 +101,12 @@ function diffEnums(previous: SchemaSnapshot, next: SchemaSnapshot): SchemaChange
 }
 
 function diffEnumValues(name: string, previous: SnapshotEnum, next: SnapshotEnum): SchemaChange[] {
-  const prevValues = new Set(previous.values);
-  const removed = previous.values.filter((value) => !next.values.includes(value));
-
-  // A removed or reordered value cannot be expressed with ALTER TYPE ADD VALUE.
-  // Recreating the type is destructive (dependent columns must be rewritten), so
-  // model it as drop + create and let the safety gate refuse it.
-  if (removed.length > 0) {
+  // Only tail appends are safe to automate. A removal, reorder, or insertion
+  // between existing values needs a deliberate data migration and type swap.
+  const previousIsPrefix = previous.values.every(
+    (value, index) => next.values[index] === value,
+  );
+  if (!previousIsPrefix) {
     return [
       { kind: "drop-enum", enum: name },
       { kind: "create-enum", enum: next },
@@ -115,12 +114,10 @@ function diffEnumValues(name: string, previous: SnapshotEnum, next: SnapshotEnum
   }
 
   const changes: SchemaChange[] = [];
-  for (let index = 0; index < next.values.length; index += 1) {
+  for (let index = previous.values.length; index < next.values.length; index += 1) {
     const value = next.values[index] as string;
-    if (prevValues.has(value)) continue;
     const preceding = index > 0 ? (next.values[index - 1] as string) : null;
-    const after = preceding !== null && prevValues.has(preceding) ? preceding : null;
-    changes.push({ kind: "add-enum-value", enum: name, value, after });
+    changes.push({ kind: "add-enum-value", enum: name, value, after: preceding });
   }
   return changes;
 }

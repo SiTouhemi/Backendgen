@@ -53,12 +53,12 @@ const CRON = `/**
  * evaluated in UTC. Supports wildcards, steps (star-slash-n), values, a-b
  * ranges and comma lists — the exact grammar validated at generation time.
  */
-function fieldMatches(field: string, value: number): boolean {
+function fieldMatches(field: string, value: number, minimum: number): boolean {
   if (field === '*') return true;
 
   const step = /^\\*\\/(\\d{1,3})$/.exec(field);
   if (step !== null) {
-    return value % Number(step[1]) === 0;
+    return (value - minimum) % Number(step[1]) === 0;
   }
 
   return field.split(',').some((part) => {
@@ -83,15 +83,15 @@ export function cronMatches(schedule: string, date: Date): boolean {
   }
 
   const timeMatches =
-    fieldMatches(minute, date.getUTCMinutes()) &&
-    fieldMatches(hour, date.getUTCHours()) &&
-    fieldMatches(month, date.getUTCMonth() + 1);
+    fieldMatches(minute, date.getUTCMinutes(), 0) &&
+    fieldMatches(hour, date.getUTCHours(), 0) &&
+    fieldMatches(month, date.getUTCMonth() + 1, 1);
 
   // Standard cron rule: when both day fields are restricted, either may match.
   const domRestricted = dayOfMonth !== '*';
   const dowRestricted = dayOfWeek !== '*';
-  const domMatches = fieldMatches(dayOfMonth, date.getUTCDate());
-  const dowMatches = fieldMatches(dayOfWeek, date.getUTCDay());
+  const domMatches = fieldMatches(dayOfMonth, date.getUTCDate(), 1);
+  const dowMatches = fieldMatches(dayOfWeek, date.getUTCDay(), 0);
   const dayMatches =
     domRestricted && dowRestricted ? domMatches || dowMatches : domMatches && dowMatches;
 
@@ -126,6 +126,11 @@ describe('cron matcher', () => {
     expect(cronMatches('*/15 * * * *', at('2030-01-01T10:20:00Z'))).toBe(false);
     expect(cronMatches('0 9-17 * * *', at('2030-01-01T13:00:00Z'))).toBe(true);
     expect(cronMatches('0 0 1,15 * *', at('2030-01-15T00:00:00Z'))).toBe(true);
+    // Month/day fields are one-based, so */2 starts at January/day 1.
+    expect(cronMatches('0 0 1 */2 *', at('2030-01-01T00:00:00Z'))).toBe(true);
+    expect(cronMatches('0 0 1 */2 *', at('2030-02-01T00:00:00Z'))).toBe(false);
+    expect(cronMatches('0 0 */2 * *', at('2030-01-03T00:00:00Z'))).toBe(true);
+    expect(cronMatches('0 0 */2 * *', at('2030-01-02T00:00:00Z'))).toBe(false);
   });
 
   it('applies the either-day rule when both day fields are restricted', () => {
@@ -153,6 +158,9 @@ export interface EnqueueOptions {
 
 type JobWriter = Pick<PrismaService, 'jobRecord'> | Prisma.TransactionClient;
 
+const MAX_PAYLOAD_BYTES = 64 * 1024;
+const JOB_NAME = /^[a-z][a-z0-9_-]{0,63}$/;
+
 /**
  * Enqueues durable jobs. Pass the surrounding transaction client to make the
  * job part of the caller's transaction: the job then exists if and only if the
@@ -169,9 +177,23 @@ export class JobService {
     options: EnqueueOptions = {},
   ): Promise<void> {
     const writer = client ?? this.prisma;
-    const serialized = JSON.stringify(payload);
-    if (serialized === undefined) {
+    if (!JOB_NAME.test(name)) {
+      throw new Error('Job name must be 1-64 lowercase letters, numbers, underscores, or hyphens');
+    }
+    if (options.dedupeKey !== undefined && options.dedupeKey.length > 256) {
+      throw new Error('Job dedupeKey must not exceed 256 characters');
+    }
+
+    let serialized: string;
+    try {
+      const value = JSON.stringify(payload);
+      if (value === undefined) throw new Error('not serializable');
+      serialized = value;
+    } catch {
       throw new Error('Job payload must be JSON serializable');
+    }
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_PAYLOAD_BYTES) {
+      throw new Error('Job payload must not exceed 64 KiB');
     }
 
     try {
@@ -307,7 +329,10 @@ export class JobRunner {
       }
 
       await this.prisma.jobRecord.deleteMany({
-        where: { status: 'DONE', updatedAt: { lt: new Date(Date.now() - RETENTION_MS) } },
+        where: {
+          status: { in: ['DONE', 'FAILED'] },
+          updatedAt: { lt: new Date(Date.now() - RETENTION_MS) },
+        },
       });
 
       return total;
@@ -326,29 +351,52 @@ export class JobRunner {
     const leaseUntil = new Date(Date.now() + QUEUE_LEASE_MS);
 
     return this.prisma.$transaction(async (tx) => {
+      // Retire exhausted work before selecting a batch. Otherwise a full page
+      // of exhausted rows can hide runnable jobs behind it for an entire tick.
+      await tx.jobRecord.updateMany({
+        where: {
+          status: 'PENDING',
+          attempts: { gte: MAX_ATTEMPTS },
+          nextAttemptAt: { lte: new Date() },
+          OR: [{ lockedUntil: null }, { lockedUntil: { lt: new Date() } }],
+        },
+        data: {
+          status: 'FAILED',
+          payload: null,
+          lockedUntil: null,
+          lastError: 'retry-limit-reached',
+        },
+      });
+
       const rows = await tx.$queryRaw<Array<Omit<ClaimedJob, 'leaseUntil'>>>(
         queueClaimSql('JobRecord', ['id', 'name', 'payload', 'attempts'], QUEUE_BATCH_SIZE),
       );
 
       if (rows.length === 0) return [];
 
+      // The attempt is consumed when the lease is claimed, before any handler
+      // side effect. If this process crashes, a later worker observes the
+      // increment and the retry budget still converges.
       await tx.jobRecord.updateMany({
         where: { id: { in: rows.map((row) => row.id) }, status: 'PENDING' },
-        data: { lockedUntil: leaseUntil },
+        data: { lockedUntil: leaseUntil, attempts: { increment: 1 } },
       });
 
-      return rows.map((row) => ({ ...row, leaseUntil }));
+      return rows.map((row) => ({
+        ...row,
+        attempts: row.attempts + 1,
+        leaseUntil,
+      }));
     });
   }
 
   private async processJob(row: ClaimedJob): Promise<void> {
-    const attempt = row.attempts + 1;
+    const attempt = row.attempts;
     const handler = this.handlers.get(row.name);
 
     if (handler === undefined) {
       await this.settle(row, {
         status: 'FAILED',
-        attempts: attempt,
         error: 'unsupported-job',
       });
       return;
@@ -358,26 +406,25 @@ export class JobRunner {
     try {
       payload = row.payload === null ? null : (JSON.parse(row.payload) as unknown);
     } catch {
-      await this.settle(row, { status: 'FAILED', attempts: attempt, error: 'invalid-payload' });
+      await this.settle(row, { status: 'FAILED', error: 'invalid-payload' });
       return;
     }
 
     try {
       await handler({ name: row.name, payload, attempt });
-      await this.settle(row, { status: 'DONE', attempts: attempt, error: null });
+      await this.settle(row, { status: 'DONE', error: null });
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 256) : 'unknown-handler-error';
 
       if (error instanceof NonRetryableJobError || attempt >= MAX_ATTEMPTS) {
-        await this.settle(row, { status: 'FAILED', attempts: attempt, error: message });
+        await this.settle(row, { status: 'FAILED', error: message });
         return;
       }
 
       await this.prisma.jobRecord.updateMany({
         where: { id: row.id, status: 'PENDING', lockedUntil: row.leaseUntil },
         data: {
-          attempts: attempt,
           nextAttemptAt: new Date(
             Date.now() + queueRetryDelayMs(attempt, BASE_BACKOFF_MS, MAX_BACKOFF_MS),
           ),
@@ -390,13 +437,12 @@ export class JobRunner {
 
   private async settle(
     row: ClaimedJob,
-    outcome: { status: 'DONE' | 'FAILED'; attempts: number; error: string | null },
+    outcome: { status: 'DONE' | 'FAILED'; error: string | null },
   ): Promise<void> {
     await this.prisma.jobRecord.updateMany({
       where: { id: row.id, status: 'PENDING', lockedUntil: row.leaseUntil },
       data: {
         status: outcome.status,
-        attempts: outcome.attempts,
         payload: null,
         lockedUntil: null,
         lastError: outcome.error,
@@ -477,6 +523,7 @@ export const jobHandlers = new Map<string, JobHandler>([
 
 function jobsE2e(context: TargetRenderContext): string {
   const prefix = context.settings.apiPrefix;
+  const config = jobsConfig(context.config);
   void prefix;
 
   return `import { INestApplication } from '@nestjs/common';
@@ -621,6 +668,37 @@ describe('Background jobs (e2e)', () => {
     const row = await prisma.jobRecord.findFirstOrThrow({ where: { name: 'nobody-home' } });
     expect(row.status).toBe('FAILED');
     expect(row.lastError).toBe('unsupported-job');
+  });
+
+  it('never invokes a handler after its retry budget was already consumed', async () => {
+    await jobs.enqueue(null, 'echo', { value: 'must-not-run' });
+    await prisma.jobRecord.updateMany({
+      where: { name: 'echo' },
+      data: { attempts: ${config.maxAttempts} },
+    });
+
+    await runner.dispatchNow();
+
+    expect(seen).toEqual([]);
+    const row = await prisma.jobRecord.findFirstOrThrow({ where: { name: 'echo' } });
+    expect(row.status).toBe('FAILED');
+    expect(row.payload).toBeNull();
+    expect(row.lastError).toBe('retry-limit-reached');
+  });
+
+  it('removes retained DONE and FAILED rows', async () => {
+    const old = new Date(Date.now() - ${config.retentionDays + 1} * 24 * 60 * 60_000);
+    await prisma.jobRecord.createMany({
+      data: [
+        { name: 'echo', payload: null, status: 'DONE', nextAttemptAt: old },
+        { name: 'poison', payload: null, status: 'FAILED', nextAttemptAt: old },
+      ],
+    });
+    await prisma.jobRecord.updateMany({ data: { updatedAt: old } });
+
+    await runner.dispatchNow();
+
+    expect(await prisma.jobRecord.count()).toBe(0);
   });
 
   it('materializes exactly one job per cron occurrence across repeated ticks', async () => {

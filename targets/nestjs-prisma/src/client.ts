@@ -70,6 +70,31 @@ function hasSearch(entity: NormalizedEntity): boolean {
   );
 }
 
+function clientSample(field: NormalizedField): string {
+  if (field.enumValues !== null && field.enumValues.length > 0) {
+    return JSON.stringify(field.enumValues[0]);
+  }
+  switch (field.type) {
+    case "boolean":
+      return "false";
+    case "integer":
+    case "decimal":
+      return String(Math.max(1, field.constraints.minimum ?? 1));
+    case "date":
+      return JSON.stringify("2030-01-01");
+    case "datetime":
+      return JSON.stringify("2030-01-01T10:00:00.000Z");
+    case "uuid":
+      return JSON.stringify("00000000-0000-4000-8000-000000000001");
+    default: {
+      const minimum = Math.max(1, field.constraints.minLength ?? 1);
+      const maximum = field.constraints.maxLength ?? 64;
+      const length = Math.min(maximum, Math.max(minimum, 18));
+      return JSON.stringify("x".repeat(length));
+    }
+  }
+}
+
 function entityTypes(entity: NormalizedEntity): string {
   const model = names.model(entity.name);
   const response: string[] = [
@@ -279,7 +304,7 @@ function entityResource(entity: NormalizedEntity, prefix: string): string {
 
   return `    ${property}: {
       list: (params?: Query${model}Params): Promise<Page<${model}Response>> =>
-        request(options, 'GET', '/${prefix}/${route}', { query: params as QueryValues }),
+        request(options, 'GET', '/${prefix}/${route}', { query: params }),
       get: (id: string): Promise<${model}Response> =>
         request(options, 'GET', '/${prefix}/${route}/' + encodeURIComponent(id), {}),
       create: (input: Create${model}Input): Promise<${model}Response> =>
@@ -311,6 +336,9 @@ function indexFile(context: TargetRenderContext): string {
   const auth = context.hasFeature("auth");
   const organizations = context.hasFeature("organizations");
   const reservations = context.hasFeature("reservations");
+  const reservationConfirm = context.ir.endpoints.some(
+    (endpoint) => endpoint.feature === "reservations" && endpoint.operation === "confirm",
+  );
 
   const typeImports = new Set<string>(["Page", "ApiError"]);
   for (const entity of entities) {
@@ -377,7 +405,7 @@ function indexFile(context: TargetRenderContext): string {
   const reservationMembers = reservations
     ? `    reservations: {
       availability: (params: AvailabilityParams): Promise<AvailabilityResponse> =>
-        request(options, 'GET', '/${prefix}/reservations/availability', { query: params as QueryValues }),
+        request(options, 'GET', '/${prefix}/reservations/availability', { query: params }),
       create: (
         input: CreateReservationInput,
         extra: { idempotencyKey?: string } = {},
@@ -390,11 +418,15 @@ function indexFile(context: TargetRenderContext): string {
               : { 'idempotency-key': extra.idempotencyKey },
         }),
       list: (params?: QueryReservationParams): Promise<Page<ReservationResponse>> =>
-        request(options, 'GET', '/${prefix}/reservations', { query: params as QueryValues }),
+        request(options, 'GET', '/${prefix}/reservations', { query: params }),
       get: (id: string): Promise<ReservationResponse> =>
-        request(options, 'GET', '/${prefix}/reservations/' + encodeURIComponent(id), {}),
+        request(options, 'GET', '/${prefix}/reservations/' + encodeURIComponent(id), {}),${
+          reservationConfirm
+            ? `
       confirm: (id: string): Promise<ReservationResponse> =>
-        request(options, 'POST', '/${prefix}/reservations/' + encodeURIComponent(id) + '/confirm', {}),
+        request(options, 'POST', '/${prefix}/reservations/' + encodeURIComponent(id) + '/confirm', {}),`
+            : ""
+        }
       cancel: (id: string): Promise<ReservationResponse> =>
         request(options, 'POST', '/${prefix}/reservations/' + encodeURIComponent(id) + '/cancel', {}),
     },
@@ -428,8 +460,9 @@ function indexFile(context: TargetRenderContext): string {
       extra?: { idempotencyKey?: string },
     ): Promise<ReservationResponse>;
     list(params?: QueryReservationParams): Promise<Page<ReservationResponse>>;
-    get(id: string): Promise<ReservationResponse>;
-    confirm(id: string): Promise<ReservationResponse>;
+    get(id: string): Promise<ReservationResponse>;${
+      reservationConfirm ? "\n    confirm(id: string): Promise<ReservationResponse>;" : ""
+    }
     cancel(id: string): Promise<ReservationResponse>;
   };`
     : "";
@@ -487,7 +520,7 @@ export class ApiRequestError extends Error {
   }
 }
 
-type QueryValues = Record<string, string | number | boolean | undefined> | undefined;
+type QueryValues = object | undefined;
 
 async function request<T>(
   options: ClientOptions,
@@ -598,18 +631,23 @@ const CLIENT_TSCONFIG = `{
 }
 `;
 
-function clientE2e(context: TargetRenderContext): string | null {
-  const entities = context.crudEntities();
-  const first = entities[0];
-  if (first === undefined || !context.hasFeature("auth")) return null;
+function clientE2e(
+  context: TargetRenderContext,
+  first: NormalizedEntity,
+): string | null {
+  if (!context.hasFeature("auth")) return null;
 
   const model = names.model(first.name);
   const property = names.variable(names.route(first.name).replace(/-/g, "_"));
   const tenantScoped = first.tenant !== null && context.hasFeature("organizations");
+  const deleteRole =
+    !tenantScoped && first.ownership === null
+      ? context.ir.endpoints.find((endpoint) => endpoint.id === `${first.name}.delete`)?.roles[0]
+      : undefined;
+  const authConfig = context.featureConfig("auth") as { userEntity?: string };
+  const authUser = context.entity(authConfig.userEntity ?? "User");
+  const authUserDelegate = names.delegate(authUser.name);
   const prefix = context.settings.apiPrefix;
-
-  const factoryImport = `import { create${model} } from './utils/factories';`;
-  void factoryImport;
 
   return `import { INestApplication } from '@nestjs/common';
 import type { AddressInfo } from 'node:net';
@@ -618,7 +656,13 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/generated/common/bootstrap';
 import { PrismaService } from '../src/generated/prisma/prisma.service';
 import { resetDatabase } from './utils/reset';
-import { createClient, ApiRequestError, type ApiClient } from '../client/src';
+import {
+  createClient,
+  ApiRequestError,
+  type ApiClient,
+  type Create${model}Input,
+  type RegisterInput,
+} from '../client/src';
 
 /**
  * Drives the real HTTP server through the generated typed client. Client and
@@ -654,7 +698,7 @@ describe('Generated client (e2e)', () => {
     let client: ApiClient = createClient({ baseUrl, getAccessToken: () => accessToken });
 
     const email = 'client-' + Date.now().toString(36) + '@example.test';
-    const session = await client.auth.register({
+    const registration = {
       email,
       password: 'client-password-with-plenty-of-length',
 ${context
@@ -667,9 +711,17 @@ ${context
         !field.readOnly &&
         field.name !== "email",
     )
-    .map((field) => `      ${field.name}: 'client smoke value'.slice(0, ${field.constraints.maxLength ?? 32}),`)
+    .map((field) => `      ${field.name}: ${clientSample(field)},`)
     .join("\n")}
-    } as never);
+    } satisfies RegisterInput;
+    const session = await client.auth.register(registration);
+${deleteRole === undefined ? "" : `    // Self-registration intentionally receives the least-privileged role. Elevate
+    // this test account only because the generated DELETE route requires it.
+    await prisma.${authUserDelegate}.update({
+      where: { id: session.user.id },
+      data: { role: ${JSON.stringify(deleteRole)} },
+    });
+`}
     accessToken = session.accessToken;
 
     const me = await client.auth.me();
@@ -682,31 +734,13 @@ ${
 `
       : ""
   }
-    const payload = ${JSON.stringify(
-      Object.fromEntries(
-        writableFields(first)
-          .filter((field) => field.required && field.defaultValue === null)
-          .map((field) => [
-            field.name,
-            field.enumValues?.[0] ??
-              (field.type === "integer" || field.type === "decimal"
-                ? Math.max(1, field.constraints.minimum ?? 1)
-                : field.type === "boolean"
-                  ? false
-                  : field.type === "datetime" || field.type === "date"
-                    ? "2030-01-01T10:00:00.000Z"
-                    : "client-value"),
-          ]),
-      ),
-    )} as Record<string, unknown>;
-${writableForeignKeys(first)
-    .filter((key) => key.required)
-    .map(
-      (key) =>
-        `    payload.${key.name} = 'unresolved'; // required relation: this suite only runs when none exist`,
-    )
-    .join("\n")}
-    const created = await client.${property}.create(payload as never);
+    const payload = {
+${writableFields(first)
+  .filter((field) => field.required && field.defaultValue === null)
+  .map((field) => `      ${field.name}: ${clientSample(field)},`)
+  .join("\n")}
+    } satisfies Create${model}Input;
+    const created = await client.${property}.create(payload);
     expect(created.id).toBeDefined();
 
     const listed = await client.${property}.list({ page: 1, pageSize: 10, sort: 'createdAt' });
@@ -744,12 +778,12 @@ export function clientFiles(context: TargetRenderContext): RenderedFile[] {
     generated("client/tsconfig.json", CLIENT_TSCONFIG),
   ];
 
-  // Only emit the client e2e proof when the first crud entity has no required
-  // relations (a self-contained create) — otherwise the other suites cover it.
-  const first = context.crudEntities()[0];
-  const selfContained =
-    first !== undefined && writableForeignKeys(first).every((key) => !key.required);
-  const e2e = selfContained ? clientE2e(context) : null;
+  // Use any self-contained CRUD entity; declaration order should not suppress
+  // a valid executable client/server compatibility proof.
+  const selfContained = context
+    .crudEntities()
+    .find((entity) => writableForeignKeys(entity).every((key) => !key.required));
+  const e2e = selfContained ? clientE2e(context, selfContained) : null;
   if (e2e !== null) {
     files.push(generated("test/client.e2e-spec.ts", e2e));
   }

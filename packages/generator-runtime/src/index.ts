@@ -1,7 +1,17 @@
 export { compileBackend } from "./compile.js";
 export type { CompileOptions, CompileOutcome, CompiledBackend } from "./compile.js";
-export { diffBackend, generateBackend, SCHEMA_SNAPSHOT_PATH } from "./generate.js";
-export type { GenerateOptions, GenerateOutcome, GenerationReport } from "./generate.js";
+export {
+  ACCEPTED_MIGRATIONS_PATH,
+  diffBackend,
+  generateBackend,
+  SCHEMA_SNAPSHOT_PATH,
+} from "./generate.js";
+export type {
+  AcceptedMigration,
+  GenerateOptions,
+  GenerateOutcome,
+  GenerationReport,
+} from "./generate.js";
 export { changeSafety, describeChange, diffSchemas } from "./schema-diff.js";
 export type { ChangeSafety } from "./schema-diff.js";
 export {

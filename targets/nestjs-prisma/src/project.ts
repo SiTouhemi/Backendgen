@@ -783,6 +783,39 @@ CMD ["node", "dist/main"]
 function dockerCompose(context: TargetRenderContext): string {
   const project = context.ir.project.name;
   const port = context.settings.port;
+  const uploads = context.hasFeature("uploads");
+  // Local S3-compatible storage for the uploads feature. Credentials and the
+  // bucket name come from .env (compose interpolates it automatically), so the
+  // API, MinIO, and the one-shot bucket bootstrap always agree.
+  const minioServices = `
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: \${S3_ACCESS_KEY_ID:?Set S3_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: \${S3_SECRET_ACCESS_KEY:?Set S3_SECRET_ACCESS_KEY in .env}
+    ports:
+      - '9000:9000'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command: >-
+      mc alias set local http://minio:9000 "\${S3_ACCESS_KEY_ID:?Set S3_ACCESS_KEY_ID in .env}"
+      "\${S3_SECRET_ACCESS_KEY:?Set S3_SECRET_ACCESS_KEY in .env}"
+      && mc mb --ignore-existing "local/\${S3_BUCKET:?Set S3_BUCKET in .env}"
+    restart: 'no'
+`;
   return `services:
   postgres:
     image: postgres:16-alpine
@@ -799,16 +832,27 @@ function dockerCompose(context: TargetRenderContext): string {
       interval: 5s
       timeout: 5s
       retries: 10
-
+${uploads ? minioServices : ""}
   api:
     build: .
     depends_on:
       migrate:
-        condition: service_completed_successfully
+        condition: service_completed_successfully${
+      uploads
+        ? `
+      minio-init:
+        condition: service_completed_successfully`
+        : ""
+    }
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://\${POSTGRES_USER:-${project}}:\${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/\${POSTGRES_DB:-${project}}?schema=public
+      DATABASE_URL: postgresql://\${POSTGRES_USER:-${project}}:\${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/\${POSTGRES_DB:-${project}}?schema=public${
+      uploads
+        ? `
+      S3_ENDPOINT: http://minio:9000`
+        : ""
+    }
     ports:
       - '${port}:${port}'
     init: true
@@ -835,7 +879,12 @@ function dockerCompose(context: TargetRenderContext): string {
     restart: 'no'
 
 volumes:
-  postgres-data:
+  postgres-data:${
+      uploads
+        ? `
+  minio-data:`
+        : ""
+    }
 `;
 }
 
@@ -849,6 +898,41 @@ function readme(context: TargetRenderContext): string {
   const customization = ir.customizationPoints
     .map((point) => `- \`${point.path}\` — implements \`${point.contract}\`. ${point.description}`)
     .join("\n");
+  const uploads = context.hasFeature("uploads");
+  const composeUp = uploads
+    ? "docker compose up -d postgres minio minio-init"
+    : "docker compose up -d postgres";
+  const uploadsSection = `## File storage (uploads)
+
+Local development uses the MinIO service from \`docker-compose.yml\`; the
+defaults in \`.env.example\` (\`S3_ENDPOINT=http://localhost:9000\` plus the
+\`S3_*\` credentials, which double as the MinIO root user and password) work as
+soon as \`minio\` and \`minio-init\` are up. \`minio-init\` creates the bucket on
+first start.
+
+For production, point the API at a real object store:
+
+- \`S3_ENDPOINT\` — HTTPS origin URL of the store. Plain HTTP is refused when
+  \`NODE_ENV=production\` unless \`S3_ALLOW_INSECURE_HTTP=true\` is set explicitly.
+- \`S3_BUCKET\` — an existing bucket (3-63 character DNS-compatible name).
+- \`S3_REGION\` — the bucket's region (AWS requires the real one).
+- \`S3_ACCESS_KEY_ID\` / \`S3_SECRET_ACCESS_KEY\` — static credentials with
+  read/write access to that bucket. These are the only supported credentials:
+  session tokens, instance metadata, and workload identity are not implemented.
+- \`S3_FORCE_PATH_STYLE\` — \`true\` for MinIO and most self-hosted stores,
+  \`false\` for AWS virtual-host addressing.
+
+The store must honour the \`If-None-Match: *\` conditional header on presigned
+PUTs — it is what keeps completed objects immutable while their upload URL is
+still valid. AWS S3 and MinIO support it; verify the behaviour before adopting
+another S3-compatible provider, because this project's suite only exercises it
+against MinIO and the mock.
+
+The \`mock\` storage provider is in-memory, development-grade test
+infrastructure. It is refused outside \`NODE_ENV=test\`, so production cannot
+silently run without a real store.
+
+`;
 
   return `# ${ir.project.name}
 
@@ -867,7 +951,7 @@ of the compiler.
 
 \`\`\`bash
 cp .env.example .env      # then fill in every secret
-docker compose up -d postgres
+${composeUp}
 npm install
 npm run db:generate
 npm run db:deploy
@@ -934,7 +1018,7 @@ error body.
 
 `
       : ""
-  }## Generated and custom code
+  }${uploads ? uploadsSection : ""}## Generated and custom code
 
 \`src/generated/\` is owned by the compiler and is replaced on every generation.
 \`src/custom/\` is yours; the compiler writes it once and never overwrites it.

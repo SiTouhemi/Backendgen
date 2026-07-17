@@ -220,7 +220,9 @@ describe('SigV4 presigner', () => {
 });
 `;
 
-const S3_PROVIDER = `import { Injectable } from '@nestjs/common';
+function s3Provider(config: UploadsConfig): string {
+  const ttlSeconds = config.presignTtlMinutes * 60;
+  return `import { Injectable } from '@nestjs/common';
 import { presignS3Url } from './s3-presign';
 import {
   PresignedRequest,
@@ -228,7 +230,8 @@ import {
   StoredObjectHead,
 } from './storage-provider';
 
-const PRESIGN_TTL_SECONDS = Number(process.env.UPLOADS_PRESIGN_TTL_SECONDS ?? '900');
+const PRESIGN_TTL_SECONDS = ${ttlSeconds};
+const STORAGE_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * S3-compatible storage over presigned URLs and plain fetch — no SDK. Path
@@ -256,11 +259,40 @@ export class S3StorageProvider implements StorageProvider {
       throw new Error('Missing storage configuration: ' + missing.join(', '));
     }
 
-    this.endpoint = process.env.S3_ENDPOINT as string;
+    const endpoint = new URL(process.env.S3_ENDPOINT as string);
+    if (endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:') {
+      throw new Error('S3_ENDPOINT must use http or https.');
+    }
+    if (
+      endpoint.username !== '' ||
+      endpoint.password !== '' ||
+      endpoint.search !== '' ||
+      endpoint.hash !== '' ||
+      (endpoint.pathname !== '' && endpoint.pathname !== '/')
+    ) {
+      throw new Error('S3_ENDPOINT must be an origin URL without credentials, path, query, or fragment.');
+    }
+    if (
+      endpoint.protocol === 'http:' &&
+      process.env.NODE_ENV === 'production' &&
+      process.env.S3_ALLOW_INSECURE_HTTP !== 'true'
+    ) {
+      throw new Error(
+        'S3_ENDPOINT must use https in production unless S3_ALLOW_INSECURE_HTTP=true is explicitly set.',
+      );
+    }
+
+    this.endpoint = endpoint.origin;
     this.bucket = process.env.S3_BUCKET as string;
+    if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(this.bucket)) {
+      throw new Error('S3_BUCKET must be a valid 3-63 character DNS-compatible bucket name.');
+    }
     this.accessKeyId = process.env.S3_ACCESS_KEY_ID as string;
     this.secretAccessKey = process.env.S3_SECRET_ACCESS_KEY as string;
     this.region = process.env.S3_REGION ?? 'us-east-1';
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(this.region)) {
+      throw new Error('S3_REGION contains invalid characters.');
+    }
     this.pathStyle = process.env.S3_FORCE_PATH_STYLE !== 'false';
   }
 
@@ -293,6 +325,9 @@ export class S3StorageProvider implements StorageProvider {
     return this.presign('PUT', key, {
       'content-length': String(sizeBytes),
       'content-type': contentType,
+      // A completed object stays immutable even while the presigned URL is
+      // still valid. S3/MinIO return 412 if this key already exists.
+      'if-none-match': '*',
     });
   }
 
@@ -302,7 +337,10 @@ export class S3StorageProvider implements StorageProvider {
 
   async head(key: string): Promise<StoredObjectHead | null> {
     const request = this.presign('HEAD', key);
-    const response = await fetch(request.url, { method: 'HEAD' });
+    const response = await fetch(request.url, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(STORAGE_REQUEST_TIMEOUT_MS),
+    });
     if (response.status === 404) return null;
     if (!response.ok) {
       throw new Error('Storage HEAD failed with status ' + String(response.status));
@@ -316,15 +354,21 @@ export class S3StorageProvider implements StorageProvider {
 
   async delete(key: string): Promise<void> {
     const request = this.presign('DELETE', key);
-    const response = await fetch(request.url, { method: 'DELETE' });
+    const response = await fetch(request.url, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(STORAGE_REQUEST_TIMEOUT_MS),
+    });
     if (!response.ok && response.status !== 404) {
       throw new Error('Storage DELETE failed with status ' + String(response.status));
     }
   }
 }
 `;
+}
 
-const MOCK_PROVIDER = `import { Injectable } from '@nestjs/common';
+function mockProvider(config: UploadsConfig): string {
+  const ttlMilliseconds = config.presignTtlMinutes * 60_000;
+  return `import { Injectable } from '@nestjs/common';
 import {
   PresignedRequest,
   StorageProvider,
@@ -344,13 +388,17 @@ export class MockStorageProvider implements StorageProvider {
   async presignPut(key: string, contentType: string, sizeBytes: number): Promise<PresignedRequest> {
     return {
       url: 'mock://put/' + key,
-      headers: { 'content-length': String(sizeBytes), 'content-type': contentType },
-      expiresAt: new Date(Date.now() + 900_000).toISOString(),
+      headers: {
+        'content-length': String(sizeBytes),
+        'content-type': contentType,
+        'if-none-match': '*',
+      },
+      expiresAt: new Date(Date.now() + ${ttlMilliseconds}).toISOString(),
     };
   }
 
   async presignGet(key: string): Promise<PresignedRequest> {
-    return { url: 'mock://get/' + key, headers: {}, expiresAt: new Date(Date.now() + 900_000).toISOString() };
+    return { url: 'mock://get/' + key, headers: {}, expiresAt: new Date(Date.now() + ${ttlMilliseconds}).toISOString() };
   }
 
   async head(key: string): Promise<StoredObjectHead | null> {
@@ -363,6 +411,9 @@ export class MockStorageProvider implements StorageProvider {
 
   /** What the real client's PUT to the presigned URL would have stored. */
   simulateUpload(key: string, sizeBytes: number, contentType: string): void {
+    if (this.objects.has(key)) {
+      throw new Error('Precondition failed: object already exists');
+    }
     this.objects.set(key, { sizeBytes, contentType });
   }
 
@@ -371,6 +422,7 @@ export class MockStorageProvider implements StorageProvider {
   }
 }
 `;
+}
 
 interface ParentShape {
   entity: NormalizedEntity;
@@ -378,13 +430,78 @@ interface ParentShape {
   allowedTypes: string[];
 }
 
-function parentScopeFilter(parent: NormalizedEntity, authenticated: boolean): string {
+interface UploadPolicy {
+  adminRoles: string[];
+  deleteRoles: string[];
+  deleteRoleKind: "account" | "organization" | null;
+}
+
+function isCallerOwned(parent: NormalizedEntity, context: TargetRenderContext): boolean {
+  if (parent.ownership !== null) return true;
+  const auth = context.featureConfig("auth") as { userEntity?: string } | undefined;
+  return auth !== undefined && parent.name === (auth.userEntity ?? "User");
+}
+
+function uploadPolicy(parent: NormalizedEntity, context: TargetRenderContext): UploadPolicy {
+  const auth = context.featureConfig("auth") as
+    | { roles?: string[]; defaultRole?: string; userEntity?: string }
+    | undefined;
+  const crud = context.featureConfig("crud") as
+    | { adminRoles?: string[]; destructiveRoles?: string[]; destructiveOrgRoles?: string[] }
+    | undefined;
+  const organizations = context.featureConfig("organizations") as
+    | { roles?: string[] }
+    | undefined;
+  const accountRoles = auth?.roles ?? ["admin", "user"];
+  const registrationRole = auth?.defaultRole ?? accountRoles.at(-1) ?? "user";
+  const adminRoles =
+    crud?.adminRoles ?? accountRoles.filter((role) => role !== registrationRole).slice(0, 1);
+
+  if (parent.tenant !== null && organizations !== undefined) {
+    const organizationRoles = organizations.roles ?? ["owner", "admin", "member"];
+    return {
+      adminRoles,
+      deleteRoles:
+        crud?.destructiveOrgRoles ??
+        organizationRoles.slice(0, Math.max(1, organizationRoles.length - 1)),
+      deleteRoleKind: "organization",
+    };
+  }
+
+  if (auth !== undefined && !isCallerOwned(parent, context)) {
+    return {
+      adminRoles,
+      deleteRoles: crud?.destructiveRoles ?? adminRoles,
+      deleteRoleKind: "account",
+    };
+  }
+
+  return { adminRoles, deleteRoles: [], deleteRoleKind: null };
+}
+
+function stringArguments(values: readonly string[]): string {
+  return values.map((value) => JSON.stringify(value)).join(", ");
+}
+
+function parentScopeFilter(
+  parent: NormalizedEntity,
+  context: TargetRenderContext,
+  softDelete: "active" | "runtime" | "any",
+): string {
   const clauses: string[] = [];
-  if (parent.softDelete) clauses.push("deletedAt: null,");
+  const authenticated = context.hasFeature("auth");
+  if (parent.softDelete && softDelete === "active") clauses.push("deletedAt: null,");
+  if (parent.softDelete && softDelete === "runtime") {
+    clauses.push("...(requireActiveParent ? { deletedAt: null } : {}),");
+  }
   if (parent.tenant) clauses.push(`${parent.tenant.foreignKey}: requireOrganization(scope),`);
-  if (parent.ownership && authenticated) {
+  if (authenticated && isCallerOwned(parent, context)) {
+    const callerFilter =
+      parent.ownership !== null
+        ? `{ ${parent.ownership.foreignKey}: requireUser(scope) }`
+        : "{ AND: [{ id: requireUser(scope) }] }";
     clauses.push(
-      `...(isAdmin(scope, ADMIN_ROLES) ? {} : { ${parent.ownership.foreignKey}: requireUser(scope) }),`,
+      `...(isAdmin(scope, ADMIN_ROLES) ? {} : ${callerFilter}),`,
     );
   }
   return clauses.map((clause) => `        ${clause}`).join("\n");
@@ -403,10 +520,13 @@ function serviceFile(
   const parentModel = names.model(parent.name);
   const authenticated = context.hasFeature("auth");
   const maxBytes = shape.maxSizeMb * 1024 * 1024;
+  const policy = uploadPolicy(parent, context);
+  const callerOwned = authenticated && isCallerOwned(parent, context);
+  const scopeUsed = parent.tenant !== null || callerOwned;
 
   const scopeImports = new Set<string>(["RequestScope"]);
   if (parent.tenant) scopeImports.add("requireOrganization");
-  if (parent.ownership && authenticated) {
+  if (callerOwned) {
     scopeImports.add("isAdmin");
     scopeImports.add("requireUser");
   }
@@ -416,16 +536,19 @@ function serviceFile(
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { ${[...scopeImports].sort().join(", ")} } from '../common/scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { STORAGE_PROVIDER, StorageProvider } from './storage-provider';
 
 const MAX_SIZE_BYTES = ${maxBytes};
 const ALLOWED_TYPES: readonly string[] = ${JSON.stringify(shape.allowedTypes)};
-${parent.ownership && authenticated ? `const ADMIN_ROLES: readonly string[] = ['admin'];\n` : ""}
+const PRESIGN_TTL_MS = ${config.presignTtlMinutes} * 60_000;
+${callerOwned ? `const ADMIN_ROLES: readonly string[] = ${JSON.stringify(policy.adminRoles)};\n` : ""}
 export interface UploadTicket {
   attachmentId: string;
   uploadUrl: string;
@@ -436,16 +559,18 @@ export interface UploadTicket {
 
 @Injectable()
 export class ${model}Service {
+  private readonly logger = new Logger(${model}Service.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(STORAGE_PROVIDER) private readonly storage: StorageProvider,
   ) {}
 
   private async requireParent(parentId: string, scope: RequestScope): Promise<void> {
-    const parent = await this.prisma.${parentDelegate}.findFirst({
+${scopeUsed ? "" : "    void scope;\n"}    const parent = await this.prisma.${parentDelegate}.findFirst({
       where: {
         id: parentId,
-${parentScopeFilter(parent, authenticated)}
+${parentScopeFilter(parent, context, "active")}
       },
       select: { id: true },
     });
@@ -455,11 +580,15 @@ ${parentScopeFilter(parent, authenticated)}
     }
   }
 
-  private scopedAttachmentWhere(id: string, scope: RequestScope): Record<string, unknown> {
-    return {
+  private scopedAttachmentWhere(
+    id: string,
+    scope: RequestScope,
+    requireActiveParent = true,
+  ): Prisma.${model}WhereInput {
+${scopeUsed ? "" : "    void scope;\n"}${parent.softDelete ? "" : "    void requireActiveParent;\n"}    return {
       id,
       parent: {
-${parentScopeFilter(parent, authenticated)}
+${parentScopeFilter(parent, context, "runtime")}
       },
     };
   }
@@ -513,13 +642,16 @@ ${parentScopeFilter(parent, authenticated)}
 
   async complete(id: string, scope: RequestScope): Promise<{ id: string; status: string }> {
     const record = await this.prisma.${delegate}.findFirst({
-      where: this.scopedAttachmentWhere(id, scope) as never,
+      where: this.scopedAttachmentWhere(id, scope),
     });
     if (record === null) {
       throw new NotFoundException('Attachment not found');
     }
     if (record.status === 'READY') {
       return { id: record.id, status: record.status };
+    }
+    if (record.status !== 'UPLOADING') {
+      throw new ConflictException('Attachment is being deleted');
     }
 
     const head = await this.storage.head(record.storageKey);
@@ -533,17 +665,24 @@ ${parentScopeFilter(parent, authenticated)}
       throw new ConflictException('Uploaded object does not match the declared size and type');
     }
 
-    const updated = await this.prisma.${delegate}.update({
-      where: { id: record.id },
+    const updated = await this.prisma.${delegate}.updateMany({
+      where: { id: record.id, status: 'UPLOADING' },
       data: { status: 'READY' },
-      select: { id: true, status: true },
     });
-    return { id: updated.id, status: updated.status };
+    if (updated.count !== 1) {
+      const completed = await this.prisma.${delegate}.findFirst({
+        where: { ...this.scopedAttachmentWhere(id, scope), status: 'READY' },
+        select: { id: true },
+      });
+      if (completed !== null) return { id: completed.id, status: 'READY' };
+      throw new ConflictException('Attachment changed while completion was in progress');
+    }
+    return { id: record.id, status: 'READY' };
   }
 
   async download(id: string, scope: RequestScope): Promise<{ url: string; expiresAt: string; fileName: string }> {
     const record = await this.prisma.${delegate}.findFirst({
-      where: this.scopedAttachmentWhere(id, scope) as never,
+      where: this.scopedAttachmentWhere(id, scope),
     });
     if (record === null || record.status !== 'READY') {
       throw new NotFoundException('Attachment not found');
@@ -555,34 +694,73 @@ ${parentScopeFilter(parent, authenticated)}
 
   async remove(id: string, scope: RequestScope): Promise<void> {
     const record = await this.prisma.${delegate}.findFirst({
-      where: this.scopedAttachmentWhere(id, scope) as never,
-      select: { id: true, storageKey: true },
+      where: this.scopedAttachmentWhere(id, scope, false),
+      select: { id: true, storageKey: true, createdAt: true },
     });
     if (record === null) {
       throw new NotFoundException('Attachment not found');
     }
 
+    await this.prisma.${delegate}.updateMany({
+      where: { id: record.id, status: { in: ['UPLOADING', 'READY'] } },
+      data: { status: 'DELETING' },
+    });
     await this.storage.delete(record.storageKey);
-    await this.prisma.${delegate}.delete({ where: { id: record.id } });
+
+    // Keep a tombstone until the upload URL has expired. A late conditional
+    // PUT can recreate an object after the first delete; the sweeper performs
+    // the final delete before removing this row.
+    if (record.createdAt.getTime() <= Date.now() - PRESIGN_TTL_MS) {
+      await this.prisma.${delegate}.deleteMany({
+        where: { id: record.id, status: 'DELETING' },
+      });
+    }
   }
 
-  /** Sweeps stale UPLOADING rows and their objects. Multi-instance safe: deletes are idempotent. */
+  /** Claims stale rows before deleting bytes, so completion and cleanup cannot both win. */
   async sweepStale(olderThan: Date): Promise<number> {
     const stale = await this.prisma.${delegate}.findMany({
-      where: { status: 'UPLOADING', createdAt: { lt: olderThan } },
-      select: { id: true, storageKey: true },
+      where: {
+        OR: [
+          { status: 'UPLOADING', createdAt: { lt: olderThan } },
+          { status: 'DELETING', createdAt: { lt: olderThan } },
+        ],
+      },
+      select: { id: true, storageKey: true, status: true },
+      orderBy: { updatedAt: 'asc' },
       take: 100,
     });
 
+    let removed = 0;
     for (const record of stale) {
-      await this.storage.delete(record.storageKey);
-      await this.prisma.${delegate}.deleteMany({ where: { id: record.id, status: 'UPLOADING' } });
+      if (record.status === 'UPLOADING') {
+        const claim = await this.prisma.${delegate}.updateMany({
+          where: { id: record.id, status: 'UPLOADING', createdAt: { lt: olderThan } },
+          data: { status: 'DELETING' },
+        });
+        if (claim.count !== 1) continue;
+      }
+
+      try {
+        await this.storage.delete(record.storageKey);
+        const deleted = await this.prisma.${delegate}.deleteMany({
+          where: { id: record.id, status: 'DELETING' },
+        });
+        removed += deleted.count;
+      } catch {
+        // Keep DELETING rows for a later retry and continue processing the
+        // rest of the batch; one unavailable object must not starve cleanup.
+        this.logger.error('Failed to remove stale attachment ' + record.id);
+        await this.prisma.${delegate}.updateMany({
+          where: { id: record.id, status: 'DELETING' },
+          data: { status: 'DELETING' },
+        });
+      }
     }
-    return stale.length;
+    return removed;
   }
 }
 
-export const UPLOADS_STALE_AFTER_MS = ${config.staleAfterMinutes} * 60_000;
 `;
 }
 
@@ -595,6 +773,19 @@ function controllerFile(shape: ParentShape, context: TargetRenderContext): strin
   const attachmentRoute = names.route(attachment);
   const authenticated = context.hasFeature("auth");
   const maxBytes = shape.maxSizeMb * 1024 * 1024;
+  const policy = uploadPolicy(parent, context);
+  const deleteRoleImport =
+    policy.deleteRoleKind === "organization"
+      ? "import { OrgRoles } from '../organizations/decorators/org-roles.decorator';\n"
+      : policy.deleteRoleKind === "account"
+        ? "import { Roles } from '../auth/decorators/roles.decorator';\n"
+        : "";
+  const deleteRoleDecorator =
+    policy.deleteRoleKind === "organization"
+      ? `  @OrgRoles(${stringArguments(policy.deleteRoles)})\n`
+      : policy.deleteRoleKind === "account"
+        ? `  @Roles(${stringArguments(policy.deleteRoles)})\n`
+        : "";
 
   return `import {
   Body,
@@ -610,7 +801,7 @@ import {
   ApiBadRequestResponse,
   ApiConflictResponse,${authenticated ? "\n  ApiBearerAuth," : ""}
   ApiCreatedResponse,
-  ApiNoContentResponse,
+${policy.deleteRoleKind !== null ? "  ApiForbiddenResponse,\n" : ""}  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiProperty,
@@ -620,7 +811,7 @@ import { IsIn, IsInt, IsString, Max, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiErrorDto } from '../common/api-error.dto';
 import { CurrentScope, RequestScope } from '../common/scope';
-import { ${model}Service, UploadTicket } from './${stem}.service';
+${deleteRoleImport}import { ${model}Service, UploadTicket } from './${stem}.service';
 
 export class Request${model}UploadDto {
   @ApiProperty({ maxLength: 200 })
@@ -692,7 +883,7 @@ export class ${model}Controller {
   }
 
   @Delete('${attachmentRoute}/:id')
-  @HttpCode(HttpStatus.NO_CONTENT)
+${deleteRoleDecorator}${policy.deleteRoleKind !== null ? "  @ApiForbiddenResponse({ type: ApiErrorDto })\n" : ""}  @HttpCode(HttpStatus.NO_CONTENT)
   @ApiNoContentResponse()
   remove(@Param('id') id: string, @CurrentScope() scope: RequestScope): Promise<void> {
     return this.service.remove(id, scope);
@@ -706,7 +897,7 @@ function moduleFile(shapes: ParentShape[], config: UploadsConfig): string {
     .map((shape) => {
       const model = names.model(attachmentEntityName(shape.entity.name));
       const stem = names.file(attachmentEntityName(shape.entity.name));
-      return `import { ${model}Controller } from './${stem}.controller';\nimport { ${model}Service, UPLOADS_STALE_AFTER_MS } from './${stem}.service';`;
+      return `import { ${model}Controller } from './${stem}.controller';\nimport { ${model}Service } from './${stem}.service';`;
     })
     .join("\n");
 
@@ -730,7 +921,6 @@ function moduleFile(shapes: ParentShape[], config: UploadsConfig): string {
     )
     .join("\n");
 
-  void config;
   return `import { Injectable, Logger, Module } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -744,12 +934,14 @@ import {
   StorageProvider,
 } from './storage-provider';
 
+const UPLOADS_STALE_AFTER_MS = ${config.staleAfterMinutes} * 60_000;
+
 /**
  * Under test, storage defaults to the in-memory mock so suites never need a
  * live object store or credentials. An explicit STORAGE_PROVIDER still wins,
  * except that the mock is refused outside NODE_ENV=test.
  */
-function selectStorage(custom?: StorageProvider): StorageProvider {
+export function selectStorage(custom?: StorageProvider): StorageProvider {
   const explicit = process.env.STORAGE_PROVIDER;
   const selected =
     explicit !== undefined && explicit !== ''
@@ -825,16 +1017,31 @@ function uploadsE2e(shapes: ParentShape[], context: TargetRenderContext): string
     : "text/x-unlikely";
   const goodType = shape.allowedTypes[0]!;
   const maxBytes = shape.maxSizeMb * 1024 * 1024;
+  const setupRole = uploadPolicy(parent, context).adminRoles[0] ?? "admin";
+  const tenant = parent.tenant !== null;
+  const callerOwned = isCallerOwned(parent, context);
+  const authConfig = context.featureConfig("auth") as { userEntity?: string } | undefined;
+  const authUser = parent.name === (authConfig?.userEntity ?? "User");
+  const crudParent = context.crudEntities().some((entity) => entity.name === parent.name);
+  const organizationConfig = context.featureConfig("organizations") as
+    | { roles?: string[]; defaultRole?: string }
+    | undefined;
+  const organizationRoles = organizationConfig?.roles ?? ["owner", "admin", "member"];
+  const organizationMemberRole =
+    organizationConfig?.defaultRole ?? organizationRoles.at(-1) ?? "member";
+  const parentOverrides = [
+    ...(parent.ownership ? ["ownerId: account.id"] : []),
+    ...(tenant ? ["organizationId"] : []),
+  ].join(", ");
 
   return `import { INestApplication } from '@nestjs/common';
-import request from 'supertest';
+${tenant && callerOwned ? `import { ${names.enumType("Membership", "role")} } from '@prisma/client';\n` : ""}import request from 'supertest';
 import { PrismaService } from '../src/generated/prisma/prisma.service';
 import { MockStorageProvider } from '../src/generated/uploads/mock.provider';
 import { STORAGE_PROVIDER } from '../src/generated/uploads/storage-provider';
 import { ${names.model(attachment)}Service } from '../src/generated/uploads/${names.file(attachment)}.service';
 import { registerAccount } from './utils/auth-helper';
-import { create${names.model(parent.name)} } from './utils/factories';
-import { resetDatabase } from './utils/reset';
+${authUser ? "" : `import { create${names.model(parent.name)} } from './utils/factories';\n`}import { resetDatabase } from './utils/reset';
 import { createTestApp } from './utils/test-app';
 
 describe('Uploads (e2e)', () => {
@@ -856,13 +1063,31 @@ describe('Uploads (e2e)', () => {
     storage.reset();
   });
 
-  async function setup(): Promise<{ headers: Record<string, string>; parentId: string; ownerId: string }> {
-    const account = await registerAccount(app, prisma, { role: 'admin' });
-    const parent = await create${names.model(parent.name)}(prisma${parent.ownership ? ", { ownerId: account.id }" : ""});
+  async function setup(): Promise<{
+    headers: Record<string, string>;
+    parentId: string;
+    organizationId: string | null;
+  }> {
+    const account = await registerAccount(app, prisma, { role: '${setupRole}' });
+    const headers: Record<string, string> = {
+      Authorization: 'Bearer ' + account.accessToken,
+    };
+${
+  tenant
+    ? `    const organization = await request(app.getHttpServer())
+      .post('/${prefix}/organizations')
+      .set(headers)
+      .send({ name: 'Uploads' })
+      .expect(201);
+    const organizationId = organization.body.id as string;
+    headers['X-Organization-Id'] = organizationId;
+`
+    : "    const organizationId: string | null = null;\n"
+}    const parent = ${authUser ? "{ id: account.id }" : `await create${names.model(parent.name)}(prisma${parentOverrides ? `, { ${parentOverrides} }` : ""})`};
     return {
-      headers: { Authorization: 'Bearer ' + account.accessToken },
+      headers,
       parentId: parent.id,
-      ownerId: account.id,
+      organizationId,
     };
   }
 
@@ -895,6 +1120,9 @@ describe('Uploads (e2e)', () => {
 
     // The matching object completes and becomes downloadable.
     storage.simulateUpload(stored.storageKey, 1234, '${goodType}');
+    expect(() => storage.simulateUpload(stored.storageKey, 1234, '${goodType}')).toThrow(
+      'Precondition failed',
+    );
     await request(app.getHttpServer())
       .post('/${prefix}/${attachmentRoute}/' + ticket.body.attachmentId + '/complete')
       .set(headers)
@@ -907,13 +1135,50 @@ describe('Uploads (e2e)', () => {
     expect(download.body.url).toContain(stored.storageKey);
     expect(download.body.fileName).toBe('photo.png');
 
-    // Deleting removes the row and the stored object.
+${
+  crudParent && parent.softDelete
+    ? `    // Soft-deleting a parent retains attachment metadata, but the
+    // storage-aware attachment endpoint must still be able to purge it.
+    await request(app.getHttpServer())
+      .delete('/${prefix}/${parentRoute}/' + parentId)
+      .set(headers)
+      .expect(204);
+`
+    : crudParent
+      ? `    // A hard parent delete is blocked until storage cleanup finishes.
+    await request(app.getHttpServer())
+      .delete('/${prefix}/${parentRoute}/' + parentId)
+      .set(headers)
+      .expect(409);
+`
+      : ""
+}    // Delete removes the current object but retains a tombstone until the
+    // upload URL expires, so a late PUT cannot become a permanent orphan.
     await request(app.getHttpServer())
       .delete('/${prefix}/${attachmentRoute}/' + ticket.body.attachmentId)
       .set(headers)
       .expect(204);
     expect(storage.objects.has(stored.storageKey)).toBe(false);
-  });
+
+    storage.simulateUpload(stored.storageKey, 1234, '${goodType}');
+    await prisma.${delegate}.update({
+      where: { id: stored.id },
+      data: { createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    });
+    const service = app.get(${names.model(attachment)}Service);
+    await service.sweepStale(new Date(Date.now() - 60_000));
+    expect(await prisma.${delegate}.count()).toBe(0);
+    expect(storage.objects.has(stored.storageKey)).toBe(false);
+${
+  crudParent && !parent.softDelete
+    ? `
+    await request(app.getHttpServer())
+      .delete('/${prefix}/${parentRoute}/' + parentId)
+      .set(headers)
+      .expect(204);
+`
+    : ""
+}  });
 
   it('refuses disallowed types and oversized declarations at request time', async () => {
     const { headers, parentId } = await setup();
@@ -933,8 +1198,10 @@ describe('Uploads (e2e)', () => {
     expect(await prisma.${delegate}.count()).toBe(0);
   });
 
-  it('never exposes an attachment through another principal', async () => {
-    const { headers, parentId } = await setup();
+${
+  callerOwned
+    ? `  it('never exposes an attachment through another principal', async () => {
+    const ${tenant ? "{ headers, parentId, organizationId }" : "{ headers, parentId }"} = await setup();
 
     const ticket = await request(app.getHttpServer())
       .post('/${prefix}/${parentRoute}/' + parentId + '/attachments')
@@ -943,11 +1210,29 @@ describe('Uploads (e2e)', () => {
       .expect(201);
 
     const outsider = await registerAccount(app, prisma);
-    await request(app.getHttpServer())
+${
+  tenant
+    ? `    if (organizationId === null) throw new Error('Expected tenant setup');
+    await prisma.membership.create({
+      data: {
+        organizationId,
+        userId: outsider.id,
+        role: ${names.enumType("Membership", "role")}.${organizationMemberRole},
+      },
+    });
+`
+    : ""
+}    const outsiderHeaders: Record<string, string> = {
+      Authorization: 'Bearer ' + outsider.accessToken,
+    };
+${tenant ? "    outsiderHeaders['X-Organization-Id'] = organizationId;\n" : ""}    await request(app.getHttpServer())
       .get('/${prefix}/${attachmentRoute}/' + ticket.body.attachmentId)
-      .set({ Authorization: 'Bearer ' + outsider.accessToken })
+      .set(outsiderHeaders)
       .expect(404);
   });
+`
+    : ""
+}
 
   it('sweeps stale uploads together with their objects', async () => {
     const { headers, parentId } = await setup();
@@ -975,6 +1260,85 @@ describe('Uploads (e2e)', () => {
 `;
 }
 
+const UPLOADS_STARTUP_SPEC = `import { selectStorage } from './uploads.module';
+
+const VALID_S3_ENV = {
+  STORAGE_PROVIDER: 's3',
+  S3_ENDPOINT: 'http://localhost:9000',
+  S3_BUCKET: 'startup-test-uploads',
+  S3_REGION: 'us-east-1',
+  S3_ACCESS_KEY_ID: 'startup-test',
+  S3_SECRET_ACCESS_KEY: 'startup-test-secret',
+  S3_FORCE_PATH_STYLE: 'true',
+};
+
+/**
+ * Startup behavior of storage selection: the documented quick-start
+ * configuration must boot, and unsafe or incomplete configurations must fail
+ * with actionable errors before the application accepts traffic.
+ */
+describe('storage startup validation', () => {
+  const saved = process.env;
+
+  beforeEach(() => {
+    process.env = { ...saved };
+    delete process.env.STORAGE_PROVIDER;
+    delete process.env.S3_ALLOW_INSECURE_HTTP;
+    for (const name of Object.keys(VALID_S3_ENV)) delete process.env[name];
+  });
+
+  afterAll(() => {
+    process.env = saved;
+  });
+
+  it('boots with the documented local development configuration', () => {
+    Object.assign(process.env, VALID_S3_ENV, { NODE_ENV: 'development' });
+    expect(selectStorage().id).toBe('s3');
+  });
+
+  it('lists every missing S3 variable in one actionable error', () => {
+    Object.assign(process.env, { NODE_ENV: 'development', STORAGE_PROVIDER: 's3' });
+    expect(() => selectStorage()).toThrow(
+      'Missing storage configuration: S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY',
+    );
+  });
+
+  it('refuses the mock provider outside NODE_ENV=test', () => {
+    Object.assign(process.env, { NODE_ENV: 'production', STORAGE_PROVIDER: 'mock' });
+    expect(() => selectStorage()).toThrow('only allowed when NODE_ENV is "test"');
+  });
+
+  it('defaults to the mock provider under test', () => {
+    expect(selectStorage().id).toBe('mock');
+  });
+
+  it('requires https in production unless explicitly overridden', () => {
+    Object.assign(process.env, VALID_S3_ENV, { NODE_ENV: 'production' });
+    expect(() => selectStorage()).toThrow('S3_ENDPOINT must use https in production');
+
+    process.env.S3_ALLOW_INSECURE_HTTP = 'true';
+    expect(selectStorage().id).toBe('s3');
+  });
+
+  it('rejects an unknown provider name', () => {
+    Object.assign(process.env, { NODE_ENV: 'development', STORAGE_PROVIDER: 'gcs' });
+    expect(() => selectStorage()).toThrow('Unknown STORAGE_PROVIDER');
+  });
+});
+`;
+
+/** DNS-compatible bucket name derived from the project name, e.g. `my-api-uploads`. */
+function uploadsBucketName(projectName: string): string {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `${slug.slice(0, 63 - "-uploads".length)}-uploads`;
+}
+
+/** Local-development access key; doubles as the MinIO root user (min 3 chars). */
+function uploadsAccessKeyId(projectName: string): string {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug.length >= 3 ? slug : `${slug}-storage`;
+}
+
 export const uploadsRenderer: FeatureTargetRenderer = {
   render(context: TargetRenderContext): RenderResult {
     const config = uploadsConfig(context.config);
@@ -991,9 +1355,10 @@ export const uploadsRenderer: FeatureTargetRenderer = {
       file("src/generated/uploads/storage-provider.ts", STORAGE_PROVIDER),
       file("src/generated/uploads/s3-presign.ts", S3_PRESIGN),
       file("src/generated/uploads/s3-presign.spec.ts", S3_PRESIGN_SPEC),
-      file("src/generated/uploads/s3.provider.ts", S3_PROVIDER),
-      file("src/generated/uploads/mock.provider.ts", MOCK_PROVIDER),
+      file("src/generated/uploads/s3.provider.ts", s3Provider(config)),
+      file("src/generated/uploads/mock.provider.ts", mockProvider(config)),
       file("src/generated/uploads/uploads.module.ts", moduleFile(shapes, config)),
+      file("src/generated/uploads/uploads-startup.spec.ts", UPLOADS_STARTUP_SPEC),
     ];
 
     for (const shape of shapes) {
@@ -1029,9 +1394,41 @@ export const uploadsRenderer: FeatureTargetRenderer = {
           comment: "Object storage provider: s3 (any S3-compatible store) or mock (tests only).",
         },
         {
+          name: "S3_ENDPOINT",
+          value: "http://localhost:9000",
+          comment:
+            "Origin URL of the object store. The default points at the local MinIO service from docker-compose.yml; use your provider's HTTPS endpoint in production.",
+        },
+        {
+          name: "S3_BUCKET",
+          value: uploadsBucketName(context.ir.project.name),
+          comment: "Bucket for uploads. The docker-compose minio-init service creates it in MinIO on first start.",
+        },
+        {
+          name: "S3_REGION",
+          value: "us-east-1",
+          comment: "Region used in request signatures. MinIO accepts any value; AWS requires the bucket's real region.",
+        },
+        {
+          name: "S3_ACCESS_KEY_ID",
+          value: uploadsAccessKeyId(context.ir.project.name),
+          comment: "Static access key. docker-compose reuses this value as the local MinIO root user.",
+        },
+        {
+          name: "S3_SECRET_ACCESS_KEY",
+          value: "replace-with-a-random-storage-password",
+          comment:
+            "Static secret key (at least 8 characters). docker-compose reuses this value as the local MinIO root password.",
+        },
+        {
           name: "S3_FORCE_PATH_STYLE",
           value: "true",
           comment: "Path-style addressing; required by MinIO, set false for AWS virtual-host style.",
+        },
+        {
+          name: "S3_ALLOW_INSECURE_HTTP",
+          value: "false",
+          comment: "Explicit production-only opt-out from the default HTTPS requirement.",
         },
       ],
     };

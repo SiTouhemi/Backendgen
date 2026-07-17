@@ -175,7 +175,11 @@ export class ResendNotificationProvider implements NotificationProvider {
 
     if (!response.ok) {
       await response.body?.cancel();
-      const retryable = response.status === 429 || response.status >= 500;
+      const retryable =
+        response.status === 408 ||
+        response.status === 425 ||
+        response.status === 429 ||
+        response.status >= 500;
       throw new NotificationDeliveryError(
         \`Resend rejected the message with status \${response.status}\`,
         retryable,
@@ -723,12 +727,34 @@ export class NotificationOutboxDispatcher {
 
       if (rows.length === 0) return [];
 
+      const runnable = rows.filter((row) => row.attempts < MAX_ATTEMPTS);
+      const exhausted = rows.filter((row) => row.attempts >= MAX_ATTEMPTS);
+      if (exhausted.length > 0) {
+        await tx.notificationOutbox.updateMany({
+          where: {
+            id: { in: exhausted.map((row) => row.id) },
+            status: 'PENDING',
+          },
+          data: {
+            status: 'FAILED',
+            payload: null,
+            lockedUntil: null,
+            lastError: 'retry-limit-reached',
+          },
+        });
+      }
+      if (runnable.length === 0) return [];
+
       await tx.notificationOutbox.updateMany({
-        where: { id: { in: rows.map((row) => row.id) }, status: 'PENDING' },
-        data: { lockedUntil: leaseUntil },
+        where: { id: { in: runnable.map((row) => row.id) }, status: 'PENDING' },
+        data: { lockedUntil: leaseUntil, attempts: { increment: 1 } },
       });
 
-      return rows.map((row) => ({ ...row, leaseUntil }));
+      return runnable.map((row) => ({
+        ...row,
+        attempts: row.attempts + 1,
+        leaseUntil,
+      }));
     });
   }
 
@@ -740,7 +766,7 @@ export class NotificationOutboxDispatcher {
         where: { id: row.id, status: 'PENDING', lockedUntil: row.leaseUntil },
         data: {
           status: 'DELIVERED',
-          attempts: row.attempts + 1,
+          attempts: row.attempts,
           deliveredAt: new Date(),
           providerMessageId: result.messageId?.slice(0, 256) ?? null,
           payload: null,
@@ -754,7 +780,7 @@ export class NotificationOutboxDispatcher {
   }
 
   private async recordFailure(row: ClaimedRow, error: unknown): Promise<void> {
-    const attempt = row.attempts + 1;
+    const attempt = row.attempts;
     const classified = this.classify(error);
     const terminal = !classified.retryable || attempt >= MAX_ATTEMPTS;
     const category = terminal && classified.retryable ? 'retry-limit-reached' : classified.category;
@@ -1186,6 +1212,23 @@ ${
         data: expect.objectContaining({
           status: 'FAILED',
           attempts: ${config.maxAttempts},
+          payload: null,
+          lastError: 'retry-limit-reached',
+        }),
+      }),
+    );
+  });
+
+  it('does not call the provider again when a crashed final attempt is reclaimed', async () => {
+    tx.$queryRaw.mockResolvedValue([row(${config.maxAttempts})]);
+
+    await expect(dispatcher.dispatchOnce()).resolves.toBe(0);
+
+    expect(notifications.deliverOnce).not.toHaveBeenCalled();
+    expect(tx.notificationOutbox.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
           payload: null,
           lastError: 'retry-limit-reached',
         }),

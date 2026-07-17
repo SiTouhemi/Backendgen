@@ -18,6 +18,7 @@
     { "path": "../../features/crud" },
     { "path": "../../features/jobs" },
     { "path": "../../features/uploads" },
+    { "path": "../../features/webhooks" },
     { "path": "../../features/notifications" },
     { "path": "../../features/organizations" },
     { "path": "../../features/reservations" }

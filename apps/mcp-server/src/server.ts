@@ -13,7 +13,7 @@ const MAX_RESPONSE_BYTES = 64_000;
 function serialize(value: unknown): string {
   const text = JSON.stringify(value, null, 2);
 
-  if (text.length <= MAX_RESPONSE_BYTES) {
+  if (Buffer.byteLength(text, "utf8") <= MAX_RESPONSE_BYTES) {
     return text;
   }
 

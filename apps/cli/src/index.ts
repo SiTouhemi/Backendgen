@@ -30,8 +30,9 @@ Usage:
   backendgen describe-feature <feature> [--json]
   backendgen validate <spec.yaml> [--json]
   backendgen inspect <spec.yaml> [--json]
-  backendgen generate <spec.yaml> --output <dir> [--dry-run] [--force] [--allow-destructive] [--json]
-  backendgen diff <spec.yaml> --output <dir> [--allow-destructive] [--json]
+  backendgen generate <spec.yaml> --output <dir> [--dry-run] [--force] [--allow-destructive]
+                      [--accept-manual <migration-dir>] [--json]
+  backendgen diff <spec.yaml> --output <dir> [--allow-destructive] [--accept-manual <migration-dir>] [--json]
   backendgen test-generated --output <dir> [--install] [--integration] [--json]
 
 Exit codes:
@@ -348,6 +349,13 @@ async function run(): Promise<void> {
       const { spec } = await loadAndValidate(file);
       const dryRun = args.command === "diff" || args.flags.get("dry-run") === true;
 
+      const acceptManual = args.flags.get("accept-manual");
+      if (acceptManual === true) {
+        throw new CliError(
+          "--accept-manual requires a migration directory name, e.g. --accept-manual 20260717120000_backfill_owner",
+        );
+      }
+
       const outcome = await generateBackend({
         spec,
         outputDirectory: resolve(process.cwd(), output),
@@ -356,6 +364,7 @@ async function run(): Promise<void> {
         dryRun,
         force: args.flags.get("force") === true,
         allowDestructive: args.flags.get("allow-destructive") === true,
+        ...(typeof acceptManual === "string" ? { acceptManualMigration: acceptManual } : {}),
       });
 
       if (!outcome.ok) {

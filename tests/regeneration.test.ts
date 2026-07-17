@@ -1,6 +1,6 @@
 import { generateBackend, readManifest } from "@backend-compiler/generator-runtime";
 import { scenarioSpec } from "@backend-compiler/testing";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -251,7 +251,10 @@ describe("incremental migrations", () => {
     return scenarioSpec("basic-crud");
   }
 
-  async function generate(spec = baseSpec(), options: { allowDestructive?: boolean } = {}) {
+  async function generate(
+    spec = baseSpec(),
+    options: { allowDestructive?: boolean; force?: boolean } = {},
+  ) {
     return generateBackend({ spec, outputDirectory: output, ...options });
   }
 
@@ -265,6 +268,52 @@ describe("incremental migrations", () => {
     };
     expect(snapshot.version).toBe(1);
     expect(snapshot.tables.map((table) => table.name)).toContain("Note");
+    const manifest = await readManifest(output);
+    expect(manifest?.files.map((file) => file.path)).toContain(SNAPSHOT);
+  });
+
+  it("refuses missing, corrupt, or modified snapshots without rewriting history", async () => {
+    await generate();
+    const initBefore = await readFile(join(output, INIT), "utf8");
+
+    await rm(join(output, SNAPSHOT));
+    await expect(generate()).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.snapshot-missing" })],
+    });
+    await expect(readFile(join(output, INIT), "utf8")).resolves.toBe(initBefore);
+
+    const clean = await mkdtemp(join(tmpdir(), "backendgen-snapshot-invalid-"));
+    try {
+      await generateBackend({ spec: baseSpec(), outputDirectory: clean });
+      await writeFile(join(clean, SNAPSHOT), "{broken", "utf8");
+      await expect(
+        generateBackend({ spec: baseSpec(), outputDirectory: clean }),
+      ).resolves.toMatchObject({
+        ok: false,
+        issues: [expect.objectContaining({ code: "migrate.snapshot-invalid" })],
+      });
+    } finally {
+      await rm(clean, { recursive: true, force: true });
+    }
+
+    const modified = await mkdtemp(join(tmpdir(), "backendgen-snapshot-modified-"));
+    try {
+      await generateBackend({ spec: baseSpec(), outputDirectory: modified });
+      const snapshot = JSON.parse(await readFile(join(modified, SNAPSHOT), "utf8")) as {
+        featureSql: string[];
+      };
+      snapshot.featureSql.push("SELECT 1;");
+      await writeFile(join(modified, SNAPSHOT), JSON.stringify(snapshot), "utf8");
+      await expect(
+        generateBackend({ spec: baseSpec(), outputDirectory: modified, force: true }),
+      ).resolves.toMatchObject({
+        ok: false,
+        issues: [expect.objectContaining({ code: "migrate.snapshot-modified" })],
+      });
+    } finally {
+      await rm(modified, { recursive: true, force: true });
+    }
   });
 
   it("adds a nullable column incrementally and leaves the initial migration untouched", async () => {
@@ -281,6 +330,8 @@ describe("incremental migrations", () => {
     const migration = await readFile(join(output, FIRST), "utf8");
     expect(migration).toContain('ALTER TABLE "Note" ADD COLUMN "priority" INTEGER;');
     expect(migration).not.toContain("NOT NULL");
+    expect(migration).toContain("BEGIN;");
+    expect(migration).toContain("COMMIT;");
 
     await expect(readFile(join(output, INIT), "utf8")).resolves.toBe(initBefore);
     expect(second.report.created).toContain(FIRST);
@@ -308,6 +359,36 @@ describe("incremental migrations", () => {
       ok: false,
       issues: [expect.objectContaining({ code: "migrate.not-null-requires-default" })],
     });
+  });
+
+  it("refuses tightening nullability until a manual backfill has run", async () => {
+    await generate();
+    const spec = baseSpec();
+    spec.entities.Note!.fields.pinned = { type: "boolean", required: true, default: false };
+
+    await expect(generate(spec)).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.not-null-backfill-required" })],
+    });
+  });
+
+  it("refuses feature-owned SQL removal even when destructive changes are allowed", async () => {
+    const reservations = scenarioSpec("hotel-reservation");
+    await generateBackend({ spec: reservations, outputDirectory: output });
+    const withoutReservations = structuredClone(reservations);
+    delete withoutReservations.features.reservations;
+    delete withoutReservations.features.notifications;
+
+    const result = await generateBackend({
+      spec: withoutReservations,
+      outputDirectory: output,
+      allowDestructive: true,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.map((item) => item.code)).toContain(
+      "migrate.feature-sql-change-unsupported",
+    );
   });
 
   it("refuses destructive changes unless explicitly allowed, then labels them", async () => {
@@ -375,8 +456,80 @@ describe("incremental migrations", () => {
     expect(third.ok).toBe(true);
 
     const migration = await readFile(join(output, SECOND), "utf8");
-    expect(migration).toContain("cannot run inside a transaction block");
+    expect(migration).toContain("outside an explicit transaction");
     expect(migration).toContain(`ALTER TYPE "NoteStatus" ADD VALUE 'ARCHIVED' AFTER 'DONE';`);
+    expect(migration).not.toContain("BEGIN;");
+  });
+
+  it("refuses enum reorder/non-tail changes and mixed enum migrations", async () => {
+    const withEnum = baseSpec();
+    withEnum.entities.Note!.fields.status = {
+      type: "string",
+      required: true,
+      enum: ["OPEN", "DONE"],
+      default: "OPEN",
+    };
+    await generate(withEnum);
+
+    const reordered = structuredClone(withEnum);
+    reordered.entities.Note!.fields.status = {
+      type: "string",
+      required: true,
+      enum: ["DONE", "OPEN"],
+      default: "OPEN",
+    };
+    await expect(generate(reordered, { allowDestructive: true })).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.enum-change-unsupported" })],
+    });
+
+    const mixed = structuredClone(withEnum);
+    mixed.entities.Note!.fields.status = {
+      type: "string",
+      required: true,
+      enum: ["OPEN", "DONE", "ARCHIVED"],
+      default: "ARCHIVED",
+    };
+    await expect(generate(mixed)).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.mixed-enum-change-unsupported" })],
+    });
+  });
+
+  it("numbers after the highest timestamped manual migration and validates its file", async () => {
+    await generate();
+    const manualDirectory = join(output, "prisma/migrations/00000000000042_manual");
+    await mkdir(manualDirectory, { recursive: true });
+    await writeFile(join(manualDirectory, "migration.sql"), "-- manual\nSELECT 1;\n", "utf8");
+
+    const spec = baseSpec();
+    spec.entities.Note!.fields.priority = { type: "integer" };
+    const result = await generate(spec);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.report.created).toContain(
+      "prisma/migrations/00000000000043_backendgen/migration.sql",
+    );
+
+    const broken = join(output, "prisma/migrations/00000000000044_manual");
+    await mkdir(broken, { recursive: true });
+    await expect(generate(spec)).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.history-missing" })],
+    });
+  });
+
+  it("never repairs modified or missing generated migration history, even when forced", async () => {
+    await generate();
+    const initBefore = await readFile(join(output, INIT), "utf8");
+    await writeFile(join(output, INIT), `${initBefore}\n-- edited\n`, "utf8");
+
+    await expect(
+      generate(baseSpec(), { allowDestructive: true, force: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.history-modified" })],
+    });
   });
 
   it("emits nothing when the specification is unchanged", async () => {

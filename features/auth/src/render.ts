@@ -557,6 +557,8 @@ function authService(
   const delegate = names.delegate(user.name);
   const extraFields = writableFields(user).filter((field) => field.name !== "email");
   const durableRegistrationNotification = hasNotificationEvent(context, "user_registered");
+  const durableRegistrationWebhook =
+    context.hasFeature("webhooks") && !context.hasFeature("organizations");
   const activeAccountFilter = user.softDelete ? ", deletedAt: null" : "";
   const activeTokenOwnerFilter = user.softDelete ? ", user: { deletedAt: null }" : "";
   const verificationAccountUpdate = user.softDelete
@@ -783,10 +785,21 @@ ${passwordAccountUpdate}
   const outboxImport = durableRegistrationNotification
     ? "import { enqueueNotification } from '../notifications/outbox';\n"
     : "";
+  const webhookOutboxImport = durableRegistrationWebhook
+    ? "import { enqueueWebhookEvent } from '../webhooks/webhook-outbox';\n"
+    : "";
 
   const registrationOutboxWrite = durableRegistrationNotification
     ? `
         await enqueueNotification(tx, 'user.registered', { userId: account.id });
+`
+    : "";
+  const registrationWebhookWrite = durableRegistrationWebhook
+    ? `
+        await enqueueWebhookEvent(tx, 'user.registered', {
+          userId: account.id,
+          email: account.email,
+        });
 `
     : "";
 
@@ -827,7 +840,7 @@ ${badRequestImport}  ConflictException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, type ${model} } from '@prisma/client';
-${outboxImport}import { PrismaService } from '../prisma/prisma.service';
+${outboxImport}${webhookOutboxImport}import { PrismaService } from '../prisma/prisma.service';
 import {
   AccountDto,
   AuthResponseDto,
@@ -879,7 +892,7 @@ ${createFields}
           },
         });
 ${verificationTokenWrite}        const pair = await this.tokens.issue(account, tx);
-${registrationOutboxWrite}        return { account, pair };
+${registrationOutboxWrite}${registrationWebhookWrite}        return { account, pair };
       });
     } catch (error) {
       // The pre-check gives a friendly fast path; this handles a concurrent

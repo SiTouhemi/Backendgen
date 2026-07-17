@@ -80,6 +80,110 @@ describe("scenarios", () => {
     },
   );
 
+  it("generates production-safe, role-aware development seeds", () => {
+    const { rendered } = compile("all-features");
+    const seed = rendered.files.find((file) => file.path === "prisma/seed.ts")!.contents;
+
+    expect(seed).toContain("ALLOW_PRODUCTION_SEED !== 'true'");
+    expect(seed).toContain("role: index === 0");
+    expect(seed).toContain("UserRole.admin");
+    expect(seed).toContain("UserRole.member");
+    expect(seed).toContain("MembershipRole.owner");
+    expect(seed).toContain("ReservationStatus.CONFIRMED");
+    expect(seed).not.toContain("as never");
+  });
+
+  it("omits an impossible seed instead of emitting guaranteed unique violations", () => {
+    const scenario = SCENARIOS.find((candidate) => candidate.name === "basic-crud")!;
+    const spec = structuredClone(scenario.spec);
+    spec.entities.Note!.fields.code = {
+      type: "string",
+      required: true,
+      unique: true,
+      enum: ["ONLY"],
+    };
+
+    const result = compileBackend(spec, { features, targets });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const paths = renderBackend(result.value).files.map((file) => file.path);
+    expect(paths).not.toContain("prisma/seed.ts");
+  });
+
+  it("uses a global parent pool when only the child entity is tenant-scoped", () => {
+    const scenario = SCENARIOS.find((candidate) => candidate.name === "multi-tenant-saas")!;
+    const spec = structuredClone(scenario.spec);
+    spec.features.organizations = {
+      ...(spec.features.organizations ?? {}),
+      scopedEntities: ["Task"],
+    };
+
+    const result = compileBackend(spec, { features, targets });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const seed = renderBackend(result.value).files.find(
+      (file) => file.path === "prisma/seed.ts",
+    )!.contents;
+
+    expect(seed).toContain("projectId: projectIds[index % projectIds.length]!");
+    expect(seed).not.toContain("projectIdsByOrganization[organizationId]");
+  });
+
+  it("makes an explicit unique-index field deterministic across every row", () => {
+    const spec = structuredClone(
+      SCENARIOS.find((candidate) => candidate.name === "basic-crud")!.spec,
+    );
+    spec.entities.Note!.indexes = [{ fields: ["title", "pinned"], unique: true }];
+
+    const result = compileBackend(spec, { features, targets });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const seed = renderBackend(result.value).files.find(
+      (file) => file.path === "prisma/seed.ts",
+    )!.contents;
+
+    expect(seed).toContain("title: seedUniqueString(ordinal, 1, 200)");
+  });
+
+  it("excludes a tenant child whose unique global parent pool is too small", () => {
+    const spec = structuredClone(
+      SCENARIOS.find((candidate) => candidate.name === "multi-tenant-saas")!.spec,
+    );
+    spec.features.organizations = {
+      ...(spec.features.organizations ?? {}),
+      scopedEntities: ["Task"],
+    };
+    spec.entities.Task!.indexes = [{ fields: ["projectId"], unique: true }];
+
+    const result = compileBackend(spec, { features, targets });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const seed = renderBackend(result.value).files.find(
+      (file) => file.path === "prisma/seed.ts",
+    )!.contents;
+
+    expect(seed).toContain("Not seeded: Task");
+    expect(seed).toContain("unique relation project has 5 parent row(s) for 10 child rows");
+  });
+
+  it("omits both seed and seed test when auth users require an unsatisfied relation", () => {
+    const spec = structuredClone(
+      SCENARIOS.find((candidate) => candidate.name === "file-uploads")!.spec,
+    );
+    spec.entities.User!.relations = [
+      { name: "manager", type: "belongsTo", target: "User", required: true },
+    ];
+
+    const result = compileBackend(spec, { features, targets });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const paths = renderBackend(result.value).files.map((file) => file.path);
+
+    expect(paths).not.toContain("prisma/seed.ts");
+    expect(paths).not.toContain("test/seed.e2e-spec.ts");
+  });
+
   it.each(SCENARIOS.map((scenario) => scenario.name))(
     "renders a typed API client for '%s'",
     (name) => {
@@ -293,6 +397,52 @@ describe("scenarios", () => {
       compiled.ir.endpoints.some((endpoint) => endpoint.id === "Appointment.confirm"),
     ).toBe(false);
     expect(compiled.ir.events.some((event) => event.name === "reservation.expired")).toBe(false);
+    const client = rendered.files.find((file) => file.path === "client/src/index.ts")!;
+    expect(client.contents).not.toContain("confirm(id: string)");
+    expect(client.contents).not.toContain("/confirm");
+  });
+
+  it("webhooks generate transactional capture, safe management, and an authorization-aware client proof", () => {
+    const { compiled, rendered } = compile("webhooks");
+    const contents = (path: string): string =>
+      rendered.files.find((file) => file.path === path)?.contents ?? "";
+
+    expect(compiled.ir.endpoints.find((endpoint) => endpoint.id === "WebhookEndpoint.create")?.roles)
+      .toEqual(["admin"]);
+    expect(contents("src/generated/auth/auth.service.ts")).toContain(
+      "await enqueueWebhookEvent(tx, 'user.registered'",
+    );
+    expect(contents("src/generated/webhooks/webhook-dispatcher.ts")).toContain(
+      "skipDuplicates: true",
+    );
+    expect(contents("src/generated/webhooks/webhook-dispatcher.ts")).toContain(
+      "resolveWebhookTarget(url)",
+    );
+    expect(contents("test/client.e2e-spec.ts")).toContain(
+      "data: { role: \"admin\" }",
+    );
+  });
+
+  it("tenant webhooks fail closed and generate organization-isolation coverage", () => {
+    const { rendered } = compile("webhooks-multitenant");
+    const contents = (path: string): string =>
+      rendered.files.find((file) => file.path === path)?.contents ?? "";
+
+    expect(contents("src/generated/webhooks/webhook-outbox.ts")).not.toContain(
+      '"user.registered"',
+    );
+    expect(contents("src/generated/webhooks/webhook-outbox.ts")).toContain(
+      "organizationId: string",
+    );
+    expect(contents("src/generated/webhooks/webhook.controller.ts")).toContain(
+      '@OrgRoles("owner")',
+    );
+    expect(contents("src/generated/webhooks/webhook-dispatcher.ts")).toContain(
+      "organizationId: event.organizationId",
+    );
+    expect(contents("test/webhooks.e2e-spec.ts")).toContain(
+      "never fans an organization event out across tenant boundaries",
+    );
   });
 
   it("scopes reservations to owned resources and never treats the registration role as admin", () => {
@@ -334,9 +484,12 @@ describe("scenarios", () => {
     expect(compiled.ir.features.map((feature) => feature.name)).toEqual([
       "crud",
       "auth",
+      "jobs",
       "notifications",
       "organizations",
       "reservations",
+      "uploads",
+      "webhooks",
     ]);
 
     const reservation = compiled.ir.entities.find((entity) => entity.name === "Reservation")!;
@@ -347,6 +500,12 @@ describe("scenarios", () => {
     expect(appModule.contents).toContain("JwtAuthGuard");
     expect(appModule.contents).toContain("OrganizationContextGuard");
     expect(appModule.contents).toContain("RolesGuard");
+    expect(appModule.contents).toContain("JobsModule");
+    expect(appModule.contents).toContain("UploadsModule");
+    expect(appModule.contents).toContain("WebhooksModule");
+    expect(
+      rendered.files.some((file) => file.path === "test/client.e2e-spec.ts"),
+    ).toBe(true);
 
     // The organization context guard must run after authentication and before
     // the role guard, or a tenant check would read an empty request.

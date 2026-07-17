@@ -128,6 +128,33 @@ describe("schema differ", () => {
     expect(changeSafety(changes[0]!)).toBe("destructive");
   });
 
+  it("rejects enum reordering and non-tail insertion as type recreation", () => {
+    const before = snapshot({ enums: [{ name: "S", values: ["A", "B"] }] });
+
+    expect(
+      diffSchemas(before, snapshot({ enums: [{ name: "S", values: ["B", "A"] }] })).map(
+        (change) => change.kind,
+      ),
+    ).toEqual(["drop-enum", "create-enum"]);
+    expect(
+      diffSchemas(before, snapshot({ enums: [{ name: "S", values: ["A", "X", "B"] }] })).map(
+        (change) => change.kind,
+      ),
+    ).toEqual(["drop-enum", "create-enum"]);
+  });
+
+  it("chains multiple tail additions in their declared order", () => {
+    const changes = diffSchemas(
+      snapshot({ enums: [{ name: "S", values: ["A"] }] }),
+      snapshot({ enums: [{ name: "S", values: ["A", "B", "C"] }] }),
+    );
+
+    expect(changes).toEqual([
+      { kind: "add-enum-value", enum: "S", value: "B", after: "A" },
+      { kind: "add-enum-value", enum: "S", value: "C", after: "B" },
+    ]);
+  });
+
   it("recreates a foreign key whose referential action changed, flagging cascade as destructive", () => {
     const before = snapshot({
       tables: [
