@@ -1,10 +1,10 @@
 # The full-feature proof specification: every supported feature pack at once.
-# This is the exact input for the retained proof project under
-# generated/all-features-proof-20260717. Regenerate it with:
+# Use this canonical input to create a fresh full-feature proof with:
 #
 #   backendgen generate examples/all-features/backend.yaml --output <dir>
 #
-# A second generation into the same directory must report no changes.
+# A second generation into that fresh directory must report no changes.
+# Previously retained proof directories keep their original immutable migrations.
 specVersion: backendcompiler.dev/v1
 
 project:

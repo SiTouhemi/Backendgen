@@ -11,7 +11,7 @@ powershell -ExecutionPolicy Bypass -File scripts/verify-local.ps1
 ```
 
 The script creates a disposable trust-authenticated PostgreSQL cluster bound to
-`127.0.0.1:55432`. For each of the six scenarios it creates an isolated
+`127.0.0.1:55432`. For each of the ten scenarios it creates an isolated
 database, generates the project, installs its exact direct dependencies, creates
 the Prisma client, validates and builds the project, applies the generated
 migration, runs unit and PostgreSQL integration tests, and drops the database.

@@ -899,6 +899,15 @@ function readme(context: TargetRenderContext): string {
     .map((point) => `- \`${point.path}\` — implements \`${point.contract}\`. ${point.description}`)
     .join("\n");
   const uploads = context.hasFeature("uploads");
+  const notifications = context.featureConfig("notifications");
+  const notificationProvider =
+    typeof notifications?.provider === "string" ? notifications.provider : null;
+  const notificationRequirement =
+    notificationProvider === "resend"
+      ? "- A valid Resend API key for notification and account-recovery delivery"
+      : notificationProvider === "custom"
+        ? "- A custom notification provider registered through `CustomModule`"
+        : "";
   const composeUp = uploads
     ? "docker compose up -d postgres minio minio-init"
     : "docker compose up -d postgres";
@@ -946,6 +955,7 @@ of the compiler.
 
 - Node.js 22+
 - Docker (for PostgreSQL), or an existing PostgreSQL 14+ database
+${notificationRequirement}
 
 ## Quick start
 
@@ -961,7 +971,23 @@ npm run start:dev
 The first \`npm install\` creates \`package-lock.json\`. Commit that lockfile and
 use \`npm ci\` in automation to reproduce the complete tested dependency tree.
 
-The API listens on port ${settings.port}. Set \`SWAGGER_ENABLED=true\` to serve
+${
+    notificationProvider === "resend"
+      ? `This specification selects the Resend notification provider. Set
+\`RESEND_API_KEY\` to a valid Resend key before starting the API; a placeholder
+can make configuration look complete but cannot deliver verification or
+password-reset links. Resend is an external service and is not provisioned by
+the generated Compose file.
+
+`
+      : notificationProvider === "custom"
+        ? `This specification selects a custom notification provider. Implement and
+register \`CUSTOM_NOTIFICATION_PROVIDER\` in \`CustomModule\` before starting the
+API. Account-recovery flows deliberately refuse a non-delivering fallback.
+
+`
+        : ""
+  }The API listens on port ${settings.port}. Set \`SWAGGER_ENABLED=true\` to serve
 OpenAPI documentation at \`/${settings.apiPrefix}/docs\`. It is disabled by default
 in \`.env.example\` and whenever \`NODE_ENV=production\`.
 

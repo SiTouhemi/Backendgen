@@ -47,6 +47,30 @@ describe("backendgen subprocess contract", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true, outputPath: output });
   });
 
+  it("includes reviewable migration SQL in diff JSON and human output", async () => {
+    const output = await temporaryDirectory();
+    const args = ["diff", "examples/notes-api/backend.yaml", "--output", output];
+
+    const jsonResult = run([...args, "--json"]);
+    expect(jsonResult.status).toBe(0);
+    expect(JSON.parse(jsonResult.stdout)).toMatchObject({
+      dryRun: true,
+      migrationSql: [
+        {
+          path: "prisma/migrations/00000000000000_init/migration.sql",
+          destructive: false,
+          sql: expect.stringContaining("BEGIN;"),
+        },
+      ],
+    });
+
+    const humanResult = run(args);
+    expect(humanResult.status).toBe(0);
+    expect(humanResult.stdout).toContain("Migration SQL:");
+    expect(humanResult.stdout).toContain("00000000000000_init/migration.sql");
+    expect(humanResult.stdout).toContain("BEGIN;");
+  });
+
   it("initializes a valid nested starter specification and refuses to overwrite it", async () => {
     const directory = await temporaryDirectory();
     const output = join(directory, "nested", "backend.yaml");

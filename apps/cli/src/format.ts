@@ -131,6 +131,16 @@ export function formatReport(report: GenerationReport): string {
     }
   }
 
+  if (report.migrationSql.length > 0) {
+    lines.push("", "Migration SQL:");
+    for (const migration of report.migrationSql) {
+      lines.push(
+        `--- ${migration.path}${migration.destructive ? " [DESTRUCTIVE]" : ""} ---`,
+        migration.sql.trimEnd(),
+      );
+    }
+  }
+
   if (report.customizationPoints.length > 0) {
     lines.push("", "Customization points:");
     for (const point of report.customizationPoints) {

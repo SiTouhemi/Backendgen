@@ -2,7 +2,10 @@
 
 Backend Compiler is a local-first, deterministic backend generator for coding agents. An agent writes a compact `backendcompiler.dev/v1` YAML or JSON specification; the compiler validates it, creates framework-neutral IR, and generates a tested NestJS 11 + Prisma 6 + PostgreSQL repository.
 
-Version 0.2.0 includes CRUD, authentication, organizations and tenant isolation, reservations with PostgreSQL overlap prevention, and notifications with a transactional outbox. It also provides the `backendgen` CLI and twelve MCP tools. FastAPI and hosted SaaS infrastructure are intentionally out of scope.
+Version 0.2.0 includes CRUD, authentication, organizations and tenant isolation,
+reservations, notifications, webhooks, durable jobs, and presigned uploads. It
+also provides the `backendgen` CLI and twelve MCP tools. FastAPI and hosted SaaS
+infrastructure are intentionally out of scope.
 
 ## Requirements
 
@@ -46,7 +49,7 @@ node apps/cli/dist/src/index.js generate examples/hotel-booking/backend.yaml --o
 |---|---|
 | `npm run build` | Compile all workspaces with TypeScript project references. |
 | `npm test` | Build and run unit, CLI, MCP, compiler, and rendering tests. |
-| `npm run test:e2e` | Generate and regenerate all six scenario projects. Set `BACKENDGEN_E2E_BUILD=1` to install/build/test them. |
+| `npm run test:e2e` | Generate and regenerate all ten scenario projects. Set `BACKENDGEN_E2E_BUILD=1` to install/build/test them. |
 | `npm run licenses` | Regenerate the deterministic third-party license report. |
 | `npm run benchmark:validate` | Validate benchmark result files without inventing measurements. |
 
@@ -58,7 +61,10 @@ target an existing database instead, export `DATABASE_URL` and
 
 Generated files and user code are separated. Files marked `generated` in `.backendgen/manifest.json` are compiler-owned. Files marked `custom-scaffold` are written once and never overwritten. Generation refuses to replace locally modified generated files unless `--force` is explicit.
 
-Schema changes regenerate as incremental `ALTER` migrations on top of an immutable history; destructive statements are refused unless `--allow-destructive` is explicit. See [migrations and schema evolution](docs/MIGRATIONS.md).
+Schema changes regenerate as incremental `ALTER` migrations on top of an
+immutable history. Destructive drops are refused unless `--allow-destructive`
+is explicit; data-dependent type changes and backfills require a reviewed
+manual migration. See [migrations and schema evolution](docs/MIGRATIONS.md).
 
 Account verification/reset requires the notifications feature with a delivering `resend` or `custom` provider. The `log` provider is a metadata-only sink and intentionally never prints recipients, bodies, links, or tokens. Generated production recovery links require an HTTPS `APP_PUBLIC_URL`.
 

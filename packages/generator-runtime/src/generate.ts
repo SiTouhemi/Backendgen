@@ -72,6 +72,8 @@ export interface GenerationReport {
   irChecksum: string;
   /** Commands to run inside the generated project. */
   nextSteps: string[];
+  /** Migration files this run would create or replace, including reviewable SQL. */
+  migrationSql: Array<{ path: string; sql: string; destructive: boolean }>;
 }
 
 export type GenerateOutcome =
@@ -548,6 +550,17 @@ async function applyIncrementalMigrations(input: {
         ),
       );
     }
+    if (change.kind === "alter-column-type") {
+      issues.push(
+        issue(
+          "migrate.type-change-unsupported",
+          `/${change.table}/${change.column}`,
+          `Changing "${change.table}"."${change.column}" from ${change.from} to ${change.to} ` +
+            "cannot be cast safely without understanding the existing data and default expression. " +
+            acceptHint,
+        ),
+      );
+    }
     if (change.kind === "drop-feature-sql") {
       issues.push(
         issue(
@@ -860,6 +873,7 @@ export async function generateBackend(options: GenerateOptions): Promise<Generat
   const report = buildReport({
     compiled: compiled.value,
     plan,
+    files,
     outputDirectory,
     dryRun,
     fileCount: files.length,
@@ -916,12 +930,31 @@ export async function generateBackend(options: GenerateOptions): Promise<Generat
 function buildReport(input: {
   compiled: CompiledBackend;
   plan: GenerationPlan;
+  files: readonly RenderedFile[];
   outputDirectory: string;
   dryRun: boolean;
   fileCount: number;
 }): GenerationReport {
-  const { compiled, plan, outputDirectory, dryRun, fileCount } = input;
+  const { compiled, plan, files, outputDirectory, dryRun, fileCount } = input;
   const commands = compiled.target.commands;
+  const migrationActions = new Set(
+    plan.files
+      .filter(
+        (file) =>
+          (file.action === "create" || file.action === "update") &&
+          file.path.startsWith("prisma/migrations/") &&
+          file.path.endsWith("/migration.sql"),
+      )
+      .map((file) => file.path),
+  );
+  const migrationSql = files
+    .filter((file) => migrationActions.has(file.path))
+    .map((file) => ({
+      path: file.path,
+      sql: file.contents,
+      destructive: file.contents.includes("-- DESTRUCTIVE:"),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
 
   return {
     success: plan.conflicts.length === 0,
@@ -952,6 +985,7 @@ function buildReport(input: {
       commands.migrate,
       commands.test,
     ],
+    migrationSql,
   };
 }
 

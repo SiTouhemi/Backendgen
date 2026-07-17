@@ -27,7 +27,12 @@ npx prisma migrate deploy    # applies only the new incremental migration
 ```
 
 `backendgen diff` (or `generate --dry-run`) previews the migration a change
-would produce without writing anything.
+would produce without writing anything. Human output prints each pending SQL
+file; JSON output exposes the same content in the structured `migrationSql`
+array so automation can require review before deployment.
+
+Initial migrations are wrapped in `BEGIN`/`COMMIT`, including feature-owned
+PostgreSQL DDL, so a late failure does not leave a partially created schema.
 
 Migration folder names use a deterministic counter, not a timestamp: Prisma
 only requires lexicographic ordering, and a counter keeps generation
@@ -41,7 +46,8 @@ Every schema change is classified before any SQL is written:
 |---|---|---|
 | safe | new table, new nullable column, new index, new enum value | emitted normally |
 | needs-default | new **required** column on an existing table | allowed only when the field has a `default` in the specification (used to backfill); otherwise generation fails with `migrate.not-null-requires-default` |
-| destructive | drop table/column/enum, column type change, switching a foreign key to `CASCADE` | generation **refuses** with `migrate.destructive-change`; re-run with `--allow-destructive` to emit the statements, each preceded by a `-- DESTRUCTIVE:` comment |
+| destructive | drop table/column/enum, switching a foreign key to `CASCADE` | generation **refuses** with `migrate.destructive-change`; re-run with `--allow-destructive` to emit the statements, each preceded by a `-- DESTRUCTIVE:` comment |
+| manual | column type conversion, existing-column backfill, non-tail enum change, feature-SQL removal/replacement | generation refuses until a reviewed manual migration is recorded with `--accept-manual` |
 
 Review anything destructive before deploying. `SET NOT NULL` on an existing
 column fails at deploy time if rows still hold NULLs — backfill first.
@@ -61,6 +67,7 @@ writes the SQL:
 | `migrate.not-null-requires-default` | a new required column has no default to backfill existing rows with (fixable in the specification, or manually) |
 | `migrate.feature-sql-change-unsupported` | feature-owned raw SQL was removed or replaced |
 | `migrate.enum-change-unsupported` | an enum was removed, reordered, or changed anywhere except its tail |
+| `migrate.type-change-unsupported` | changing a column type requires a data-aware cast and default migration |
 
 The completion workflow records a reviewed, hand-written migration as
 implementing the whole pending transition, then advances the snapshot so
@@ -125,20 +132,19 @@ generation is what makes this recovery trivial.
 ## Development shortcut
 
 While iterating with a database you do not care about, `npx prisma migrate
-reset` re-applies the whole history (and the seed) from scratch. If you would
-rather squash accumulated increments during early development, delete the
-generated project's `prisma/migrations`, `.backendgen/schema-snapshot.json`
-and the database, then regenerate for a fresh `_init`.
+reset` re-applies the whole history (and the seed) from scratch. To squash
+history during early development, preserve `src/custom/`, remove the entire
+disposable generated project and database, then generate into a clean output
+directory. Deleting only migrations or the snapshot leaves the manifest
+claiming files that no longer exist and correctly fails closed.
 
 ## Projects generated before snapshots existed
 
-A project without `.backendgen/schema-snapshot.json` falls back to the old
-behaviour once: the initial migration is rewritten in place (with a warning)
-and a snapshot is recorded, so every generation after that is incremental. If
-the old `_init` was already applied to a database you care about, restore it
-from version control (`git checkout -- prisma/migrations/00000000000000_init`)
-before deploying, then let the next specification change produce a proper
-incremental migration.
+An existing generated project without `.backendgen/schema-snapshot.json` fails
+`migrate.snapshot-missing`; the generator will not guess whether its initial
+migration was deployed. Restore the snapshot and manifest from version control,
+or generate into a clean directory and create a reviewed migration from the
+deployed schema to the newly generated schema.
 
 ## Upgrading a database created by an earlier 0.2 alpha
 
@@ -181,7 +187,6 @@ Take a backup, rehearse against a production-sized clone, then deploy.
 
 Feature packs emit SQL Prisma's schema language cannot express — the
 reservations overlap exclusion constraint, for example. These statements are
-part of the snapshot: adding or reconfiguring such a feature emits the new
-statements in the incremental migration, and removing one emits a commented
-note (the generator never guesses how to reverse feature-owned SQL — review
-and drop it by hand).
+part of the snapshot. Adding feature SQL emits it in an incremental migration;
+removing or replacing it fails `migrate.feature-sql-change-unsupported` until a
+reviewed manual migration performs the transition and is accepted.

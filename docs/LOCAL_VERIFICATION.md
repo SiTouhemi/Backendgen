@@ -7,15 +7,16 @@ for real S3-compatible storage.
 ## Compiler and generator
 
 - TypeScript project build (`npm run build`): passed.
-- Unit and contract tests (`npm run test:unit`): 226/226 passed across 23 suites
-  (includes the new manual-migration acceptance suite).
+- Unit and contract tests (`npm test`): 228/228 passed across 22 suites
+  (including migration-integrity and migration-safety regressions).
 - `npm audit` (workspace, full and `--omit=dev`): 0 vulnerabilities.
 - `git diff --check`: clean.
 
 ## Full-feature proof project
 
-`generated/all-features-proof-20260717` is generated from
-`examples/all-features/backend.yaml` — its exact, committed input. Observed:
+`generated/all-features-proof-20260717` is a retained project originally
+generated from `examples/all-features/backend.yaml`. Its committed migrations
+remain immutable as the generator evolves. Observed:
 
 - Regeneration into the existing directory: 0 created, 0 updated,
   140 unchanged, 4 preserved (byte-identical, custom code intact).
@@ -27,6 +28,17 @@ for real S3-compatible storage.
   storage startup-validation suite).
 - Generated PostgreSQL integration tests: 56/56 passed across 15 suites
   against a fresh database with migrations deployed from zero.
+
+A separate clean generation at `generated/all-features-atomic-proof` verified
+the current generator without rewriting the retained proof's immutable migration:
+
+- The initial migration is wrapped in `BEGIN` and `COMMIT`.
+- A deliberately failing statement rolls the migration back with zero public
+  tables left behind.
+- A second generation reports 0 created, 0 updated, 140 unchanged, and 4
+  preserved files.
+- Clean install, Prisma generate/validate, strict backend and client builds,
+  53/53 generated unit tests, and production audit all pass.
 
 ## Quick-start boot and live HTTP smoke
 
@@ -73,6 +85,12 @@ zero, run generated unit and integration suites, then discard the cluster and
 project. All ten scenarios passed on 2026-07-17: basic-crud, file-uploads,
 webhooks, webhooks-multitenant, background-jobs, authentication,
 multi-tenant-saas, hotel-reservation, appointment-scheduling, all-features.
+
+After the atomic-migration and CLI-reporting changes, the representative
+basic-crud, hotel-reservation, and all-features scenarios were rerun against
+fresh PostgreSQL clusters and all passed. This covers ordinary migrations,
+the `btree_gist` reservation migration, and the combined feature set; the full
+ten-scenario result above is the immediately preceding baseline.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/verify-local.ps1

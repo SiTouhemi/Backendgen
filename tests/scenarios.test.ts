@@ -564,6 +564,12 @@ describe("scenarios", () => {
     expect(compose).toContain("${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}");
     expect(compose).not.toContain("POSTGRES_PASSWORD: everything-api");
 
+    const readme = contents("README.md");
+    expect(readme).toContain("A valid Resend API key");
+    expect(readme).toContain("Resend is an external service");
+    expect(readme).toContain("cannot deliver verification or");
+    expect(readme).toContain("password-reset links");
+
     const tsconfig = JSON.parse(contents("tsconfig.json")) as {
       compilerOptions: Record<string, unknown>;
     };

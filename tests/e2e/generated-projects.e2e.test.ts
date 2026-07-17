@@ -6,6 +6,7 @@ import {
   runGeneratedTests,
 } from "@backend-compiler/generator-runtime";
 import { SCENARIOS } from "@backend-compiler/testing";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,45 @@ const selected = process.env.BACKENDGEN_E2E_SCENARIO
   : SCENARIOS;
 
 if (selected.length === 0) throw new Error(`Unknown BACKENDGEN_E2E_SCENARIO '${process.env.BACKENDGEN_E2E_SCENARIO}'`);
+
+async function verifyInitialMigrationRollback(output: string, root: string, databaseUrl: string) {
+  const migrationPath = join(
+    output,
+    "prisma",
+    "migrations",
+    "00000000000000_init",
+    "migration.sql",
+  );
+  const migration = await readFile(migrationPath, "utf8");
+  expect(migration).toMatch(/BEGIN;[\s\S]*COMMIT;\s*$/);
+
+  const failing = migration.replace(/COMMIT;\s*$/, "SELECT 1 / 0;\n\nCOMMIT;\n");
+  const probePath = join(root, "initial-migration-rollback-probe.sql");
+  await writeFile(probePath, failing, "utf8");
+
+  const psqlUrl = new URL(databaseUrl);
+  psqlUrl.searchParams.delete("schema");
+  const failed = spawnSync(
+    "psql",
+    [psqlUrl.toString(), "-X", "-v", "ON_ERROR_STOP=1", "--file", probePath],
+    { encoding: "utf8" },
+  );
+  expect(failed.status, `${failed.stdout}\n${failed.stderr}`).not.toBe(0);
+
+  const tables = spawnSync(
+    "psql",
+    [
+      psqlUrl.toString(),
+      "-X",
+      "-tA",
+      "-c",
+      "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';",
+    ],
+    { encoding: "utf8" },
+  );
+  expect(tables.status, `${tables.stdout}\n${tables.stderr}`).toBe(0);
+  expect(tables.stdout.trim()).toBe("0");
+}
 
 afterAll(async () => {
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
@@ -57,6 +97,9 @@ describe("generated project lifecycle", () => {
 
     if (process.env.BACKENDGEN_E2E_BUILD === "1") {
       const databaseUrl = process.env.DATABASE_URL;
+      if (databaseUrl !== undefined) {
+        await verifyInitialMigrationRollback(output, root, databaseUrl);
+      }
       const result = await runGeneratedTests({
         outputDirectory: output,
         install: true,

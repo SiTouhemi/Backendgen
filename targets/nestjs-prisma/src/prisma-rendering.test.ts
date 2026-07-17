@@ -70,6 +70,9 @@ describe("Prisma schema and initial DDL rendering", () => {
     expect(schema).toContain("createdAt DateTime @default(now()) @db.Timestamptz(3)");
     expect(schema).toContain("startsAt DateTime @db.Timestamptz(3)");
     expect(migration).toContain('"startsAt" TIMESTAMPTZ(3) NOT NULL');
+    expect(migration).toContain("BEGIN;");
+    expect(migration).toMatch(/BEGIN;[\s\S]*CREATE TABLE[\s\S]*COMMIT;/);
+    expect(migration.trim().endsWith("COMMIT;")).toBe(true);
     expect(schema).toContain("idempotencyKey String?");
     expect(migration).toContain('"idempotencyKey" TEXT');
     expect(migration).not.toContain('"idempotencyKey" TEXT NOT NULL');

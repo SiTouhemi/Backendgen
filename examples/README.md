@@ -10,7 +10,7 @@ Each directory holds one complete `backendcompiler.dev/v1` specification. They m
 | [hotel-booking](hotel-booking/backend.yaml) | crud, auth, reservations, notifications | The reference scenario: holds, database-level overlap prevention, recovery delivery, and a transactional notification outbox. |
 | [appointments](appointments/backend.yaml) | crud, auth, reservations | Reservations without holds — immediate confirmation. |
 | [desk-booking](desk-booking/backend.yaml) | crud, auth, organizations, reservations, notifications | A compact combined example; where feature interactions show up. |
-| [all-features](all-features/backend.yaml) | every feature pack | The full-feature proof specification: crud, auth (verification + reset), organizations, reservations, notifications, webhooks, jobs (cron), and uploads. Reproduces `generated/all-features-proof-20260717` byte for byte; a second generation reports no changes. |
+| [all-features](all-features/backend.yaml) | every feature pack | The canonical input for a clean full-feature generation: crud, auth (verification + reset), organizations, reservations, notifications, webhooks, jobs (cron), and uploads. Regenerating the same freshly generated directory reports no changes. Existing retained proofs preserve their original immutable migrations. |
 
 Try one:
 

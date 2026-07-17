@@ -372,6 +372,18 @@ describe("incremental migrations", () => {
     });
   });
 
+  it("requires a reviewed manual migration for column type changes", async () => {
+    await generate();
+
+    const spec = baseSpec();
+    spec.entities.Note!.fields.pinned = { type: "string", required: false };
+
+    await expect(generate(spec, { allowDestructive: true })).resolves.toMatchObject({
+      ok: false,
+      issues: [expect.objectContaining({ code: "migrate.type-change-unsupported" })],
+    });
+  });
+
   it("refuses feature-owned SQL removal even when destructive changes are allowed", async () => {
     const reservations = scenarioSpec("hotel-reservation");
     await generateBackend({ spec: reservations, outputDirectory: output });

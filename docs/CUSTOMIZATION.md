@@ -87,4 +87,7 @@ Every generation report lists the customization points for your specification. T
 
 If generation reports a modified-file conflict, the right fix is almost always moving the behavior behind a customization point rather than `--force` (which discards your edit). Untracked files you created are preserved unless they collide with a newly generated path.
 
-If the specification change altered entities, read [MIGRATIONS.md](MIGRATIONS.md) before deploying — the rewritten init migration must not be re-deployed over an applied one.
+If the specification change altered entities, read [MIGRATIONS.md](MIGRATIONS.md)
+before deploying. Existing migration history is immutable: supported changes
+append a new migration, while backfills and type conversions use the explicit
+manual-migration acceptance workflow.

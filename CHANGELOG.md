@@ -4,9 +4,19 @@
 
 ### Release blockers closed (2026-07-17)
 
+- Initial PostgreSQL migrations are atomic (`BEGIN`/`COMMIT`), arbitrary column
+  type conversions now fail closed into the reviewed manual-migration workflow,
+  and `backendgen diff` exposes the exact pending SQL in both human and JSON
+  output.
+- Generated READMEs now state when a valid external Resend key or custom
+  notification provider is required; the full-feature quick start no longer
+  implies that Compose provisions notification delivery.
+
 - Manual migration completion: new `--accept-manual <migration-dir>` option on `generate`/`diff` records a reviewed hand-written migration as implementing the entire pending schema transition (nullable→required backfills, feature-SQL removal, non-tail enum changes). Acceptance validates the directory, refuses generator-owned/already-recorded/out-of-order/incomplete migrations, advances the snapshot only on success, and binds the migration and both snapshots by SHA-256 into the manifest and `.backendgen/accepted-migrations.json`. Accepted files are immutable history: edits, deletion, or record tampering fail closed even with `--force`. Refusal messages now point to the workflow. See `docs/MIGRATIONS.md`.
 - Untracked files that are byte-identical to the rendered output are now adopted into the manifest instead of reported as conflicts.
-- Reproducible proof project: `examples/all-features/backend.yaml` is the exact input for `generated/all-features-proof-20260717` (every feature pack enabled); regeneration is idempotent and preserves custom code.
+- Reproducible proof input: `examples/all-features/backend.yaml` enables every
+  feature pack; clean generation is idempotent, while retained proof projects
+  preserve their immutable migrations and custom code.
 - Working uploads quick start: generated `docker-compose.yml` now includes a pinned MinIO service with a health check plus a one-shot bucket-bootstrap service; `.env.example` carries a complete, working local `S3_*` configuration; the README documents production requirements, the `If-None-Match: *` conditional-write dependency, and static-credential limitations. A generated `uploads-startup.spec.ts` asserts that the documented configuration boots and that unsafe or incomplete configurations fail with actionable errors. The mock storage provider remains test-only.
 
 ### Feature expansion
@@ -46,6 +56,6 @@
 - Added twelve local MCP tools with bounded responses and filesystem sandboxing.
 - Added generated-project lifecycle tests, MCP protocol tests, target composition tests, CI, licensing, benchmarks, and open-source documentation.
 
-All six generated-backend lifecycles pass locally against disposable PostgreSQL,
+All ten generated-backend lifecycles pass locally against disposable PostgreSQL,
 including migrations, concurrency and tenant-isolation tests. The release remains
 alpha pending an independent generated-code security review.

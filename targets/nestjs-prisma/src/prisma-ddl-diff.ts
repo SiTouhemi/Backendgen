@@ -39,11 +39,9 @@ function statementFor(change: SchemaChange): string {
       );
 
     case "alter-column-type":
-      return (
-        `-- DESTRUCTIVE: changes the type of "${change.table}"."${change.column}" ` +
-        `from ${change.from} to ${change.to}; existing values are cast in place.\n` +
-        `ALTER TABLE "${change.table}" ALTER COLUMN "${change.column}" TYPE ${change.to} ` +
-        `USING "${change.column}"::${change.to};`
+      throw new Error(
+        `Column type change ${change.table}.${change.column} (${change.from} -> ${change.to}) ` +
+          "requires a reviewed manual migration.",
       );
 
     case "alter-column-nullability":
