@@ -1,0 +1,14 @@
+interface:
+  display_name: "BackendGen"
+  short_description: "Generate tested backends from compact specs"
+  default_prompt: "Use $backendgen to design and generate a tested backend for this application."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "backendgen"
+      description: "Local BackendGen compiler tools"
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

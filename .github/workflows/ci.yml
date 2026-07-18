@@ -24,6 +24,31 @@ jobs:
       - run: npm run licenses
       - run: npm audit --audit-level=high
 
+  fuzz-security-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:fuzz:ci
+
+  distribution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:release
+      - run: npm run benchmark:expansion:check
+      - run: npm run test:distribution
+
   generated-project:
     runs-on: ubuntu-latest
     strategy:

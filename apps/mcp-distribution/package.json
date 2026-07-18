@@ -1,0 +1,37 @@
+{
+  "name": "backendgen-mcp",
+  "version": "0.2.0",
+  "description": "Local, token-conscious MCP server for the BackendGen backend compiler.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "backendgen-mcp": "./dist/backendgen-mcp.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "server.json",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "ai",
+    "backend",
+    "code-generation",
+    "mcp",
+    "nestjs",
+    "postgresql",
+    "prisma"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "prepack": "node ../../scripts/build-distribution.mjs"
+  }
+}

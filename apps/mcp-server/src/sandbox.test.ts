@@ -2,7 +2,32 @@ import { mkdir, mkdtemp, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Sandbox, SandboxError } from "./sandbox.js";
+import { parseAllowedRoots, Sandbox, SandboxError } from "./sandbox.js";
+
+describe("parseAllowedRoots", () => {
+  it("splits POSIX colon-delimited lists of absolute paths", () => {
+    expect(parseAllowedRoots("/srv/projects:/home/dev/apps", "linux")).toEqual([
+      "/srv/projects",
+      "/home/dev/apps",
+    ]);
+  });
+
+  it("preserves Windows drive letters while splitting on semicolons and bare colons", () => {
+    expect(parseAllowedRoots("C:\\projects;D:/apps", "win32")).toEqual([
+      "C:\\projects",
+      "D:/apps",
+    ]);
+    expect(parseAllowedRoots("C:\\projects:relative-extra", "win32")).toEqual([
+      "C:\\projects",
+      "relative-extra",
+    ]);
+  });
+
+  it("splits semicolon-delimited lists on every platform and drops empty entries", () => {
+    expect(parseAllowedRoots("/srv/a; /srv/b;;", "linux")).toEqual(["/srv/a", "/srv/b"]);
+    expect(parseAllowedRoots("C:\\a; C:\\b;", "win32")).toEqual(["C:\\a", "C:\\b"]);
+  });
+});
 
 describe("Sandbox", () => {
   it("allows relative and absolute descendants, including new paths", async () => {

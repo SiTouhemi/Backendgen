@@ -1,0 +1,49 @@
+name: Bug report
+description: A defect in the compiler, CLI, MCP server, or generated code
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security vulnerabilities must not be reported here.** Follow [SECURITY.md](../../SECURITY.md) instead.
+
+        Never paste secrets, `.env` contents, tokens, private customer specifications, or generated customer repositories. Reproduce with a minimal disposable specification.
+  - type: input
+    id: version
+    attributes:
+      label: BackendGen version
+      description: Output of `backendgen --version`, or the commit hash for a monorepo checkout.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version (`node --version`), and — for MCP bugs — the client (Claude Code, Codex, Cursor, …).
+      placeholder: Windows 11, Node 22.14, Claude Code 2.x
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact commands from a clean state, starting with `npm ci` for monorepo checkouts. Include a minimal spec that triggers the bug.
+      placeholder: |
+        1. npm ci && npm run build
+        2. Minimal backend.yaml: …
+        3. node apps/cli/dist/src/index.js generate backend.yaml --output ./out
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Exact error output or wrong result. Redact any absolute paths you consider private.
+    validations:
+      required: true

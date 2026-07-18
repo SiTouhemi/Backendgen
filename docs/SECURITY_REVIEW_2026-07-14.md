@@ -1,5 +1,12 @@
 # Generated-Code Security Review — 2026-07-14
 
+> **Superseded in part.** A dated follow-up,
+> [SECURITY_REVIEW_2026-07-18.md](SECURITY_REVIEW_2026-07-18.md), corrects this
+> document's stale test counts, records that PostgreSQL execution has since
+> been verified locally (public hosted CI evidence is still missing), and adds
+> the findings of a second AI adversarial review. Independent human review
+> remains pending.
+
 ## Outcome
 
 The review found and fixed six high/critical trust-boundary defects plus several

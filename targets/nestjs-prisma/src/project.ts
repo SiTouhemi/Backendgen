@@ -606,6 +606,8 @@ export interface AppSecurityOptions {
   trustProxyHops?: number;
   /** Swagger UI needs an inline script exception, so it is opt-in in production. */
   swaggerEnabled?: boolean;
+  /** Exact browser origins allowed to call the API. Empty keeps CORS disabled. */
+  corsOrigins?: string[];
 }
 
 /**
@@ -623,6 +625,15 @@ export function configureApp(app: INestApplication, options: AppSecurityOptions 
   );
   server.use(json({ limit: '100kb', strict: true }));
   server.use(urlencoded({ extended: false, limit: '20kb', parameterLimit: 100 }));
+  if ((options.corsOrigins?.length ?? 0) > 0) {
+    app.enableCors({
+      origin: options.corsOrigins,
+      methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-Organization-Id'],
+      credentials: false,
+      maxAge: 600,
+    });
+  }
 
   app.setGlobalPrefix('${settings.apiPrefix}');
   app.useGlobalPipes(
@@ -663,6 +674,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
   configureApp(app, {
+    corsOrigins: environment.CORS_ORIGINS,
     swaggerEnabled: environment.SWAGGER_ENABLED,
     trustProxyHops: environment.TRUST_PROXY_HOPS,
   });
@@ -686,6 +698,7 @@ function environmentFile(context: TargetRenderContext): string {
   const fields = [
     "  NODE_ENV: 'development' | 'test' | 'production';",
     "  PORT: number;",
+    "  CORS_ORIGINS: string[];",
     "  SWAGGER_ENABLED: boolean;",
     "  TRUST_PROXY_HOPS: number;",
     ...requiredList.map((name) => `  ${name}: string;`),
@@ -704,6 +717,48 @@ ${fields}
 const REQUIRED_VARIABLES = [
 ${requiredList.map((name) => `  '${name}',`).join("\n")}
 ] as const;
+
+export function parseCorsOrigins(
+  source: string | undefined,
+  nodeEnvironment: Environment['NODE_ENV'],
+): string[] {
+  if (source === undefined || source.trim() === '') return [];
+
+  const candidates = source.split(',').map((candidate) => candidate.trim());
+  if (candidates.some((candidate) => candidate === '')) {
+    throw new Error('CORS_ORIGINS must be a comma-separated list without empty entries');
+  }
+
+  const origins = candidates.map((candidate) => {
+    if (candidate === '*') {
+      throw new Error('CORS_ORIGINS does not allow wildcard origins');
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new Error('CORS_ORIGINS contains an invalid URL: ' + candidate);
+    }
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('CORS_ORIGINS allows only HTTP(S) origins: ' + candidate);
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new Error('CORS_ORIGINS must not contain credentials: ' + candidate);
+    }
+    if (parsed.origin !== candidate) {
+      throw new Error('CORS_ORIGINS entries must be exact origins without paths: ' + candidate);
+    }
+    if (nodeEnvironment === 'production' && parsed.protocol !== 'https:') {
+      throw new Error('CORS_ORIGINS requires HTTPS origins in production: ' + candidate);
+    }
+
+    return parsed.origin;
+  });
+
+  return [...new Set(origins)].sort();
+}
 
 /**
  * Fails fast and loudly when a required secret is absent. The application must
@@ -745,12 +800,128 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   return {
     NODE_ENV: nodeEnvironment as Environment['NODE_ENV'],
     PORT: port,
+    CORS_ORIGINS: parseCorsOrigins(source.CORS_ORIGINS, nodeEnvironment as Environment['NODE_ENV']),
     SWAGGER_ENABLED: swaggerSetting === undefined ? nodeEnvironment !== 'production' : swaggerSetting === 'true',
     TRUST_PROXY_HOPS: trustProxyHops,
 ${assignments}
   };
 }
 `;
+}
+
+const ENVIRONMENT_SPEC = `import { parseCorsOrigins } from './environment';
+
+describe('environment CORS validation', () => {
+  it('keeps CORS disabled when no origins are configured', () => {
+    expect(parseCorsOrigins(undefined, 'development')).toEqual([]);
+    expect(parseCorsOrigins('  ', 'production')).toEqual([]);
+  });
+
+  it('accepts canonical origins and returns a deterministic set', () => {
+    expect(
+      parseCorsOrigins('http://localhost:5173, https://app.example.com,http://localhost:5173', 'development'),
+    ).toEqual(['http://localhost:5173', 'https://app.example.com']);
+    expect(parseCorsOrigins('https://app.example.com', 'production')).toEqual([
+      'https://app.example.com',
+    ]);
+  });
+
+  it.each([
+    '*',
+    'https://user:password@app.example.com',
+    'https://app.example.com/path',
+    'javascript:alert(1)',
+    'https://app.example.com,',
+  ])('rejects unsafe origin %s', (origin) => {
+    expect(() => parseCorsOrigins(origin, 'development')).toThrow('CORS_ORIGINS');
+  });
+
+  it('requires HTTPS in production', () => {
+    expect(() => parseCorsOrigins('http://app.example.com', 'production')).toThrow(
+      'requires HTTPS',
+    );
+  });
+});
+`;
+
+function frontendContract(context: TargetRenderContext): string {
+  const { ir, settings } = context;
+  const endpointEntities = new Set(
+    ir.endpoints.flatMap((endpoint) => (endpoint.entity === null ? [] : [endpoint.entity])),
+  );
+  const entities = ir.entities
+    .filter((entity) => entity.crud || endpointEntities.has(entity.name))
+    .map((entity) => ({
+      name: entity.name,
+      fields: entity.fields
+        .filter((field) => !field.internal)
+        .map((field) => ({
+          name: field.name,
+          type: field.type,
+          required: field.required,
+          readOnly: field.readOnly,
+          enum: field.enumValues,
+        })),
+      relations: entity.relations
+        .filter((relation) => relation.origin === 'declared')
+        .map((relation) => ({
+          name: relation.name,
+          type: relation.type,
+          target: relation.target,
+          required: relation.required,
+          foreignKey: relation.foreignKey,
+        })),
+    }));
+  const features = ir.features.map((feature) => ({
+    name: feature.name,
+    version: feature.version,
+  }));
+  const authentication = features.some((feature) => feature.name === 'auth');
+  const organizations = features.some((feature) => feature.name === 'organizations');
+  const apiBasePath = `/${settings.apiPrefix}`;
+
+  return `${JSON.stringify(
+    {
+      schemaVersion: 'backendcompiler.dev/frontend-contract/v1',
+      project: ir.project,
+      api: {
+        basePath: apiBasePath,
+        authentication: authentication
+          ? { scheme: 'bearer', header: 'Authorization', prefix: 'Bearer' }
+          : null,
+        organizationContext: organizations
+          ? { header: 'X-Organization-Id', requiredOnTenantRoutes: true }
+          : null,
+        cors: {
+          environmentVariable: 'CORS_ORIGINS',
+          format: 'comma-separated exact origins',
+          credentials: false,
+        },
+      },
+      features,
+      entities,
+      endpoints: ir.endpoints.map((endpoint) => ({
+        id: endpoint.id,
+        method: endpoint.method,
+        path: `${apiBasePath}${endpoint.path}`,
+        summary: endpoint.summary,
+        auth: endpoint.auth,
+        roles: endpoint.roles,
+        entity: endpoint.entity,
+        operation: endpoint.operation,
+      })),
+      client: settings.client
+        ? {
+            directory: 'client',
+            packageName: `${ir.project.name}-client`,
+            entrypoint: 'client/src/index.ts',
+            factory: 'createClient',
+          }
+        : null,
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 function dockerfile(context: TargetRenderContext): string {
@@ -1087,6 +1258,7 @@ export function projectFiles(context: TargetRenderContext): RenderedFile[] {
     generated("Dockerfile", dockerfile(context)),
     generated("docker-compose.yml", dockerCompose(context)),
     generated("README.md", readme(context)),
+    generated("frontend-contract.json", frontendContract(context)),
     generated("src/main.ts", mainFile(context)),
     generated("src/generated/common/bootstrap.ts", bootstrapHelper(context)),
     generated("src/generated/common/http-exception.filter.ts", EXCEPTION_FILTER),
@@ -1095,6 +1267,7 @@ export function projectFiles(context: TargetRenderContext): RenderedFile[] {
     generated("src/generated/common/public.decorator.ts", PUBLIC_DECORATOR),
     generated("src/generated/common/queue-runner.ts", QUEUE_RUNNER),
     generated("src/generated/config/environment.ts", environmentFile(context)),
+    generated("src/generated/config/environment.spec.ts", ENVIRONMENT_SPEC),
     generated("src/generated/prisma/prisma.service.ts", PRISMA_SERVICE),
     generated("src/generated/prisma/prisma.module.ts", PRISMA_MODULE),
     generated("src/generated/health/health.controller.ts", HEALTH_CONTROLLER),

@@ -1,0 +1,39 @@
+name: Design-partner interest
+description: Apply for a free guided alpha generation of your real backend
+labels: ["design-partner"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The program is described in [docs/DESIGN_PARTNERS.md](../../docs/DESIGN_PARTNERS.md): a free guided generation of a real backend in exchange for structured feedback. No production-readiness promise is made for an alpha.
+
+        Share only what you are comfortable posting publicly — no secrets, credentials, or private code. Details can wait for the intake conversation.
+  - type: textarea
+    id: project
+    attributes:
+      label: Your project
+      description: What you are building and roughly what the backend needs (entities, auth, organizations, uploads, …).
+    validations:
+      required: true
+  - type: input
+    id: tools
+    attributes:
+      label: AI tools you build with
+      placeholder: Lovable, v0, Codex, Claude Code, Cursor…
+    validations:
+      required: true
+  - type: dropdown
+    id: stack
+    attributes:
+      label: Is a NestJS + Prisma + PostgreSQL backend acceptable?
+      options:
+        - "Yes"
+        - "Not sure — tell me more"
+    validations:
+      required: true
+  - type: input
+    id: timeline
+    attributes:
+      label: When do you need the backend?
+    validations:
+      required: false

@@ -1,0 +1,71 @@
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Use an npm CLI with trusted-publishing support
+        run: npm install --global npm@11
+      - run: npm ci
+      - name: Verify release metadata
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const version = process.env.RELEASE_TAG.slice(1);
+          for (const path of ["apps/distribution/package.json", "apps/mcp-distribution/package.json"]) {
+            const pkg = JSON.parse(await readFile(path, "utf8"));
+            if (pkg.version !== version) throw new Error(`${path} is ${pkg.version}, release is ${version}`);
+          }
+          const mcpPackage = JSON.parse(await readFile("apps/mcp-distribution/package.json", "utf8"));
+          const server = JSON.parse(await readFile("apps/mcp-distribution/server.json", "utf8"));
+          if (!mcpPackage.mcpName || mcpPackage.mcpName !== server.name) {
+            throw new Error("Run npm run prepare:mcp-registry with the final GitHub owner before release");
+          }
+          if (server.version !== version || server.packages?.[0]?.version !== version) {
+            throw new Error("server.json version does not match the release");
+          }
+          NODE
+      - run: npm run check:release -- --release
+      - run: npm test
+      - run: npm run test:fuzz:ci
+      - run: npm run test:e2e
+      - run: npm run benchmark:expansion:check
+      - run: npm run test:distribution
+      - name: Publish CLI with npm provenance
+        run: npm publish --workspace backendgen --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish MCP server with npm provenance
+        run: npm publish --workspace backendgen-mcp --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Install verified MCP Registry publisher
+        working-directory: apps/mcp-distribution
+        run: |
+          curl --fail --location --silent --show-error \
+            --output mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/mcp-publisher_linux_amd64.tar.gz
+          echo "ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac  mcp-publisher.tar.gz" | sha256sum --check
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+      - name: Publish MCP Registry metadata
+        working-directory: apps/mcp-distribution
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

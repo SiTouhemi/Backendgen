@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { CompilerError, type Issue } from "@backend-compiler/common";
+import { CompilerError, GENERATOR_VERSION, type Issue } from "@backend-compiler/common";
 import {
   compileBackend,
   createDefaultRegistry,
@@ -7,7 +7,14 @@ import {
   generateBackend,
   runGeneratedTests,
 } from "@backend-compiler/generator-runtime";
-import { loadSpecFile, validateSpec, type BackendSpec } from "@backend-compiler/specification";
+import {
+  loadSpecFile,
+  PUBLIC_SCHEMA_NAMES,
+  PUBLIC_SCHEMAS,
+  validateSpec,
+  type BackendSpec,
+  type PublicSchemaName,
+} from "@backend-compiler/specification";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
@@ -23,6 +30,7 @@ import {
 const HELP = `backendgen — deterministic backend feature compiler
 
 Usage:
+  backendgen --version
   backendgen init [path] [--name <project-name>]
   backendgen list-targets [--json]
   backendgen describe-target <target-id> [--json]
@@ -34,6 +42,7 @@ Usage:
                       [--accept-manual <migration-dir>] [--json]
   backendgen diff <spec.yaml> --output <dir> [--allow-destructive] [--accept-manual <migration-dir>] [--json]
   backendgen test-generated --output <dir> [--install] [--integration] [--json]
+  backendgen export-schema <spec|frontend> [--output <file.json>] [--json]
 
 Exit codes:
   0  success
@@ -181,6 +190,12 @@ async function run(): Promise<void> {
   const targets = createDefaultTargets();
 
   switch (args.command) {
+    case "--version":
+    case "-v":
+    case "version":
+      process.stdout.write(`${GENERATOR_VERSION}\n`);
+      return;
+
     case "help":
     case "--help":
     case "-h": {
@@ -376,6 +391,44 @@ async function run(): Promise<void> {
       if (!outcome.report.success) {
         process.exitCode = 1;
       }
+      return;
+    }
+
+    case "export-schema": {
+      const name = args.positional[0];
+      if (name === undefined || !(PUBLIC_SCHEMA_NAMES as string[]).includes(name)) {
+        throw new CliError(
+          `export-schema requires a schema name: ${PUBLIC_SCHEMA_NAMES.join(", ")}`,
+        );
+      }
+
+      const schema = PUBLIC_SCHEMAS[name as PublicSchemaName];
+      const contents = `${JSON.stringify(schema, null, 2)}\n`;
+      const outputFlag = args.flags.get("output");
+
+      if (outputFlag === undefined) {
+        process.stdout.write(contents);
+        return;
+      }
+      if (outputFlag === true) {
+        throw new CliError("--output requires a file path, e.g. --output ./backend-spec.v1.schema.json");
+      }
+
+      const destination = resolve(process.cwd(), outputFlag);
+      const exists = await access(destination)
+        .then(() => true)
+        .catch(() => false);
+      if (exists) {
+        throw new CliError(`Refusing to overwrite existing file: ${destination}`);
+      }
+
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, contents, "utf8");
+      write(
+        json,
+        { written: destination, schema: name, schemaId: schema.$id ?? null },
+        `Wrote ${name} schema to ${destination}`,
+      );
       return;
     }
 

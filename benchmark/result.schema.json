@@ -1,26 +1,65 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://backendcompiler.dev/schemas/benchmark-result.v1.json",
+  "$id": "https://backendcompiler.dev/schemas/benchmark-result.v2.json",
   "type": "object",
-  "required": ["schemaVersion", "scenario", "arm", "model", "runId", "measurements", "outcome"],
+  "required": ["schemaVersion", "scenario", "arm", "model", "agent", "pairId", "pairPosition", "runId", "protocol", "measurements", "outcome"],
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": "backendcompiler.dev/benchmark-result/v1" },
+    "schemaVersion": { "const": "backendcompiler.dev/benchmark-result/v2" },
     "scenario": { "enum": ["todo-crud", "authentication", "multi-tenant-saas", "hotel-booking", "appointment-scheduling"] },
     "arm": { "enum": ["direct", "compiler"] },
-    "model": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1, "description": "Exact provider model version identifier, not a family name." },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pairId": { "type": "string", "minLength": 1, "description": "Identifier shared by exactly one direct run and one compiler run under the same controlled protocol." },
+    "pairPosition": { "enum": ["first", "second", "independent"], "description": "Execution position within the pair. Use independent only when both arms run in isolated environments without ordering effects." },
     "runId": { "type": "string", "minLength": 1 },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["promptFile", "requirementsFile", "suppliedContext", "startingRepoState", "maxAttempts", "environment"],
+      "properties": {
+        "promptFile": { "type": "string", "minLength": 1, "description": "Repository-relative path to the exact prompt given to the agent." },
+        "requirementsFile": { "type": "string", "minLength": 1, "description": "Repository-relative path to the shared backend requirements document." },
+        "suppliedContext": { "type": "string", "minLength": 1, "description": "What additional context the agent received beyond the prompt, or 'none'." },
+        "startingRepoState": { "type": "string", "minLength": 1, "description": "Fresh-directory statement or exact commit hash the run started from." },
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["machine", "os", "nodeVersion", "dependencyCacheState", "toolPermissions"],
+          "properties": {
+            "machine": { "type": "string", "minLength": 1, "description": "Stable non-sensitive machine label; never record usernames, serial numbers, or absolute home paths." },
+            "os": { "type": "string", "minLength": 1 },
+            "nodeVersion": { "type": "string", "minLength": 1 },
+            "dependencyCacheState": { "type": "string", "minLength": 1 },
+            "toolPermissions": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
     "measurements": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["inputTokens", "outputTokens", "toolCallTokens", "wallClockMs", "agentWrittenFiles", "generatedFiles", "humanCorrections", "generatedCodeRewrites"],
+      "required": ["attempts", "inputTokens", "cachedInputTokens", "outputTokens", "toolCallTokens", "wallClockMs", "agentWrittenFiles", "agentWrittenLines", "generatedFiles", "generatedLines", "humanCorrections", "generatedCodeRewrites"],
       "properties": {
-        "inputTokens": { "type": "integer", "minimum": 0 },
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "toolCallTokens": { "type": "integer", "minimum": 0 },
+        "attempts": { "type": "integer", "minimum": 1 },
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0, "description": "Raw provider total input accounting. When cached input is reported as a subset, it remains included here; null only when the provider does not report input tokens." },
+        "cachedInputTokens": { "type": ["integer", "null"], "minimum": 0, "description": "Provider-reported cached-input breakdown, not an additional total." },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "toolCallTokens": { "type": ["integer", "null"], "minimum": 0, "description": "Provider-reported tool-call breakdown, not added again to input-plus-output totals." },
         "wallClockMs": { "type": "integer", "minimum": 0 },
         "agentWrittenFiles": { "type": "integer", "minimum": 0 },
+        "agentWrittenLines": { "type": "integer", "minimum": 0 },
         "generatedFiles": { "type": "integer", "minimum": 0 },
+        "generatedLines": { "type": "integer", "minimum": 0 },
         "humanCorrections": { "type": "integer", "minimum": 0 },
         "generatedCodeRewrites": { "type": "integer", "minimum": 0 }
       }
@@ -28,8 +67,13 @@
     "outcome": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["buildPassed", "testsPassed"],
-      "properties": { "buildPassed": { "type": "boolean" }, "testsPassed": { "type": "boolean" }, "notes": { "type": "string" } }
+      "required": ["buildPassed", "testsPassed", "functionalChecksPassed"],
+      "properties": {
+        "buildPassed": { "type": "boolean" },
+        "testsPassed": { "type": "boolean" },
+        "functionalChecksPassed": { "type": "boolean", "description": "Result of the shared behavioral acceptance checks, run identically for both arms." },
+        "notes": { "type": "string" }
+      }
     }
   }
 }

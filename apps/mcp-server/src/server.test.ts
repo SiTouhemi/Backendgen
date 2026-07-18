@@ -33,6 +33,38 @@ describe("MCP protocol", () => {
     expect(result.tools.map((tool) => tool.name)).toContain("generate_backend");
   });
 
+  it("does not disclose configured host roots in capabilities", async () => {
+    const { client, root } = await protocol();
+    const result = await client.callTool({ name: "get_capabilities", arguments: {} });
+    const content = (result.content as Array<{ type: string; text?: string }>)[0];
+    const payload = JSON.parse(content?.text ?? "{}");
+    expect(JSON.stringify(payload)).not.toContain(root);
+    expect(payload.limits).toMatchObject({ allowedRootCount: 1 });
+  });
+
+  it("does not disclose unexpected exception messages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "backendgen-mcp-internal-"));
+    const context = createToolContext(new Sandbox([root]));
+    const secret = "PRIVATE-DEPENDENCY-DETAIL";
+    context.targets.list = () => {
+      throw new Error(secret);
+    };
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createServer(context);
+    const client = new Client({ name: "test", version: "1.0.0" }, { capabilities: {} });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    connected.push(client, server);
+
+    const result = await client.callTool({ name: "get_capabilities", arguments: {} });
+    const content = (result.content as Array<{ type: string; text?: string }>)[0];
+    const payload = JSON.parse(content?.text ?? "{}");
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({ code: "tool.internal", error: "Unexpected internal error" });
+    expect(JSON.stringify(payload)).not.toContain(secret);
+  });
+
   it("executes every advertised tool through the official transport", async () => {
     const { client, root } = await protocol();
     const spec = {

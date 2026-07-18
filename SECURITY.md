@@ -19,4 +19,8 @@ generation manifest and compiler-owned file hashes first, but configured allowed
 roots and editable custom code remain trusted code-execution boundaries.
 
 The latest generated-code review and remaining release risks are documented in
-[docs/SECURITY_REVIEW_2026-07-14.md](docs/SECURITY_REVIEW_2026-07-14.md).
+[docs/SECURITY_REVIEW_2026-07-18.md](docs/SECURITY_REVIEW_2026-07-18.md), which
+partially supersedes [docs/SECURITY_REVIEW_2026-07-14.md](docs/SECURITY_REVIEW_2026-07-14.md).
+The structural guarantees checked across deterministic generated repositories
+are documented in
+[docs/FUZZ_SECURITY_CONTRACT.md](docs/FUZZ_SECURITY_CONTRACT.md).

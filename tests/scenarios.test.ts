@@ -4,11 +4,16 @@ import {
   createDefaultTargets,
   renderBackend,
 } from "@backend-compiler/generator-runtime";
+import { PUBLIC_SCHEMAS } from "@backend-compiler/specification";
 import { runConformanceSuite, SCENARIOS } from "@backend-compiler/testing";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 
 const features = createDefaultRegistry();
 const targets = createDefaultTargets();
+const validateFrontendContract = new Ajv2020({ allErrors: true, strict: true }).compile(
+  PUBLIC_SCHEMAS.frontend,
+);
 
 function compile(name: string) {
   const scenario = SCENARIOS.find((candidate) => candidate.name === name)!;
@@ -51,6 +56,77 @@ describe("scenarios", () => {
     expect(paths).toContain("Dockerfile");
     expect(paths).toContain("docker-compose.yml");
     expect(paths).toContain(".env.example");
+    expect(paths).toContain("frontend-contract.json");
+  });
+
+  it.each(SCENARIOS.map((scenario) => scenario.name))(
+    "renders a compact, secret-free frontend contract for '%s'",
+    (name) => {
+      const { compiled, rendered } = compile(name);
+      const contractFile = rendered.files.find(
+        (file) => file.path === "frontend-contract.json",
+      )!;
+      const contract = JSON.parse(contractFile.contents) as {
+        schemaVersion: string;
+        api: { basePath: string; cors: { environmentVariable: string; credentials: boolean } };
+        entities: Array<{ name: string; fields: Array<{ name: string }> }>;
+        endpoints: Array<{ path: string }>;
+      };
+
+      expect(
+        validateFrontendContract(contract),
+        JSON.stringify(validateFrontendContract.errors, null, 2),
+      ).toBe(true);
+      expect(contract.schemaVersion).toBe("backendcompiler.dev/frontend-contract/v1");
+      expect(contract.api.basePath).toBe("/api");
+      expect(contract.api.cors).toEqual({
+        environmentVariable: "CORS_ORIGINS",
+        format: "comma-separated exact origins",
+        credentials: false,
+      });
+      expect(contract.endpoints.every((endpoint) => endpoint.path.startsWith("/api/"))).toBe(
+        true,
+      );
+
+      for (const entity of contract.entities) {
+        const compiledEntity = compiled.ir.entities.find(
+          (candidate) => candidate.name === entity.name,
+        )!;
+        const internalFields = new Set(
+          compiledEntity.fields.filter((field) => field.internal).map((field) => field.name),
+        );
+        expect(entity.fields.some((field) => internalFields.has(field.name))).toBe(false);
+      }
+      expect(contractFile.contents).not.toContain("replace-with-a-random");
+      // Secret environment names (and so their values) never reach the contract.
+      for (const secret of compiled.ir.secrets) {
+        expect(contractFile.contents).not.toContain(secret.name);
+      }
+    },
+  );
+
+  it("generates exact-origin CORS parsing and keeps credentials disabled", () => {
+    const { rendered } = compile("all-features");
+    const environment = rendered.files.find(
+      (file) => file.path === "src/generated/config/environment.ts",
+    )!.contents;
+    const bootstrap = rendered.files.find(
+      (file) => file.path === "src/generated/common/bootstrap.ts",
+    )!.contents;
+    const main = rendered.files.find((file) => file.path === "src/main.ts")!.contents;
+    const envExample = rendered.files.find((file) => file.path === ".env.example")!.contents;
+    const environmentSpec = rendered.files.find(
+      (file) => file.path === "src/generated/config/environment.spec.ts",
+    )!.contents;
+
+    expect(environment).toContain("parseCorsOrigins");
+    expect(environment).toContain("does not allow wildcard origins");
+    expect(environment).toContain("requires HTTPS origins in production");
+    expect(bootstrap).toContain("app.enableCors");
+    expect(bootstrap).toContain("credentials: false");
+    expect(main).toContain("corsOrigins: environment.CORS_ORIGINS");
+    expect(envExample).toContain("CORS_ORIGINS=");
+    expect(environmentSpec).toContain("rejects unsafe origin");
   });
 
   it.each(SCENARIOS.map((scenario) => scenario.name))(

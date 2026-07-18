@@ -13,3 +13,6 @@ graphify-out/
 *.log
 *.sqlite
 *.db
+*.tgz
+output/playwright/
+.playwright-cli/

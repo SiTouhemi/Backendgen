@@ -1,0 +1,78 @@
+name: BackendGen
+description: Validate and deterministically generate a BackendGen backend specification.
+author: BackendGen contributors
+
+branding:
+  icon: code
+  color: purple
+
+inputs:
+  spec:
+    description: Path to the backendcompiler.dev/v1 YAML or JSON specification.
+    required: false
+    default: backend.yaml
+  output:
+    description: Generated backend directory.
+    required: false
+    default: backend
+  version:
+    description: Exact public backendgen npm version to execute.
+    required: false
+    default: 0.2.0
+  check:
+    description: Fail when generation changes tracked or untracked files under output.
+    required: false
+    default: "true"
+  run-tests:
+    description: Run the generated unit suite after generation.
+    required: false
+    default: "false"
+  integration-tests:
+    description: Include generated PostgreSQL integration tests. Requires DATABASE_URL.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Require Node.js 22 or newer
+      shell: bash
+      run: |
+        node -e "const major=Number(process.versions.node.split('.')[0]); if (major < 22) { console.error('BackendGen requires Node.js 22 or newer'); process.exit(1); }"
+
+    - name: Validate and generate backend
+      shell: bash
+      env:
+        BACKENDGEN_ACTION_SPEC: ${{ inputs.spec }}
+        BACKENDGEN_ACTION_OUTPUT: ${{ inputs.output }}
+        BACKENDGEN_ACTION_VERSION: ${{ inputs.version }}
+        BACKENDGEN_ACTION_CHECK: ${{ inputs.check }}
+        BACKENDGEN_ACTION_RUN_TESTS: ${{ inputs.run-tests }}
+        BACKENDGEN_ACTION_INTEGRATION: ${{ inputs.integration-tests }}
+      run: |
+        set -euo pipefail
+        runner=(npm exec --yes --package "backendgen@${BACKENDGEN_ACTION_VERSION}" -- backendgen)
+        "${runner[@]}" validate "${BACKENDGEN_ACTION_SPEC}"
+        "${runner[@]}" generate "${BACKENDGEN_ACTION_SPEC}" --output "${BACKENDGEN_ACTION_OUTPUT}"
+
+        if [[ "${BACKENDGEN_ACTION_RUN_TESTS}" == "true" ]]; then
+          tests=(test-generated --output "${BACKENDGEN_ACTION_OUTPUT}" --install)
+          if [[ "${BACKENDGEN_ACTION_INTEGRATION}" == "true" ]]; then
+            tests+=(--integration)
+          fi
+          "${runner[@]}" "${tests[@]}"
+        fi
+
+        if [[ "${BACKENDGEN_ACTION_CHECK}" == "true" ]]; then
+          changes="$(git status --porcelain=v1 -- "${BACKENDGEN_ACTION_OUTPUT}")"
+          if [[ -n "${changes}" ]]; then
+            printf '%s\n' "${changes}"
+            echo "Generated backend is out of date. Run BackendGen locally and commit the result." >&2
+            exit 1
+          fi
+        fi
+
+        {
+          echo "### BackendGen"
+          echo "Validated ${BACKENDGEN_ACTION_SPEC} and generated ${BACKENDGEN_ACTION_OUTPUT}."
+        } >> "${GITHUB_STEP_SUMMARY}"

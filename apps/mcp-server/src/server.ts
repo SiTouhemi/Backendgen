@@ -45,7 +45,7 @@ export function createServer(context: ToolContext): Server {
     const { name, arguments: args } = request.params;
 
     try {
-      const result = await callTool(context, name, (args ?? {}) as Record<string, unknown>);
+      const result = await callTool(context, name, args);
 
       return {
         content: [{ type: "text" as const, text: serialize(result) }],
@@ -61,6 +61,7 @@ export function createServer(context: ToolContext): Server {
               type: "text" as const,
               text: serialize({
                 success: false,
+                code: error.code,
                 error: error.message,
                 issues: error.issues,
               }),
@@ -81,14 +82,21 @@ export function createServer(context: ToolContext): Server {
         };
       }
 
-      const message = error instanceof Error ? error.message : String(error);
-
+      // Unexpected failures return a fixed message and never disclose the
+      // original exception or its stack trace.
       return {
         isError: true,
         content: [
           {
             type: "text" as const,
-            text: serialize({ success: false, error: message }),
+            // Unexpected exceptions may contain absolute paths, dependency
+            // details, or secret-bearing command output. Keep the public error
+            // stable and disclose none of the original exception.
+            text: serialize({
+              success: false,
+              code: "tool.internal",
+              error: "Unexpected internal error",
+            }),
           },
         ],
       };

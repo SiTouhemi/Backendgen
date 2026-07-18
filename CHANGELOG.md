@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+- Extend the paired benchmark contract to v2: exact agent/tool version, prompt
+  and requirements provenance, starting repository state, attempt limits,
+  cached-input token accounting, agent-written and generated line counts, and
+  functional acceptance checks are now required; the summarizer validates every
+  result against the schema, requires explicit matched-pair identifiers,
+  rejects protocol drift and duplicate evidence, keeps failed runs visible per
+  arm, separates token/time/correctness sections, never double-counts cached
+  token breakdowns, and exposes no partial performance median when fewer than
+  three successful pairs or incomplete accounting exist. Both benchmark scripts
+  accept `--dir` and are covered by a new subprocess test suite.
+- Add `backendgen --version` so public bug-report instructions have a working,
+  stable version command.
+- Add the design-partner program kit (`docs/DESIGN_PARTNERS.md`): partner
+  profile, recruitment material, seven-stage trial procedure with secrets and
+  retention rules, scorecard template, and exit criteria for the alpha label.
+- Add public-repository essentials: `SUPPORT.md`, GitHub issue forms (bug,
+  feature, design-partner interest), a pull-request template, an explicit
+  alpha-status statement in the README, and a documented pre-publish tarball
+  install path for design partners.
+
+- Enforce every MCP tool's advertised JSON Schema at runtime: unknown tools, unknown properties, wrong types, explicit null, missing required arguments, mutually exclusive spec inputs, and oversized strings fail with stable codes (`tool.invalid-arguments`, `tool.unknown`, `spec.invalid`, `generation.failed`, `generation.manifest-missing`, `sandbox.denied`, `tool.internal`), deterministic escaped JSON-pointer issues, and no stack traces; the 64 KB response ceiling applies to errors as well. Unexpected exceptions and sandbox failures no longer disclose host roots or internal exception messages.
+- Ship both public contracts as versioned JSON Schemas inside the `backendgen` package, add `backendgen export-schema spec|frontend`, and validate every generated `frontend-contract.json` against the new `backendcompiler.dev/frontend-contract/v1` schema in scenario tests.
+- Add `npm run check:release`: version consistency across the root manifest, generator constant, both distribution packages, `action.yml`, and (in release mode) `server.json`, plus workflow YAML parse checks; wired into CI and the release workflow.
+- Harden the distribution smoke test: exact tarball file allowlists and required-file checks, a full packaged MCP session (initialize → get_capabilities → validate_spec → preview_generation → generate_backend → get_generation_report), packaged sandbox-denial and invalid-argument checks, bounded responses, and packed `export-schema` verification.
+- Fix `BACKENDGEN_ALLOWED_ROOTS` parsing on POSIX: colon-separated absolute roots (`/a:/b`) now split correctly; Windows drive letters remain protected.
+- Add self-contained public CLI and MCP distribution packages with consumer smoke tests.
+- Add a strict exact-origin CORS environment contract and generated frontend handoff manifest.
+- Add an open Agent Skill, reusable GitHub Action, npm trusted-publishing workflow, and MCP Registry metadata preparation.
+- Add reproducible expansion measurement and paired-run benchmark summaries without asserting unmeasured token savings.
+- Add AI-builder integration, launch/pricing guidance, and a responsive static launch page.
+
 ## 0.2.0 - Unreleased alpha
 
 ### Release blockers closed (2026-07-17)
@@ -27,6 +60,11 @@
 
 ### Release-readiness pass
 
+- Expanded the seeded generated-code security contract from CRUD/auth/tenant
+  checks to reservations, notifications, webhooks, uploads, richer scalar and
+  relation shapes, compile-success guarantees, and single-seed replay. The
+  default suite renders 250 deterministic specs; a dedicated CI job renders
+  2,000 on every push and pull request.
 - Added explicit `restrict` / `cascade` / `setNull` relation semantics, deterministic PostgreSQL-safe constraint names, automatic foreign-key indexes, UTC `TIMESTAMPTZ(3)` columns, and Prisma/DDL parity tests.
 - Hardened destructive CRUD routes with validated account/organization role policies, fail-closed guards, PostgreSQL `RESTRICT` conflict mapping, PATCH persistence coverage, stable pagination tie-breakers, bounded configured page sizes, and accurate paginated OpenAPI schemas.
 - Made account registration/session creation atomic, password reset/session revocation transactional, recovery requests enumeration-resistant, and every auth path reject soft-deleted accounts.

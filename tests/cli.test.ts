@@ -25,6 +25,13 @@ function run(args: string[]) {
 }
 
 describe("backendgen subprocess contract", () => {
+  it("reports the public generator version", () => {
+    const result = run(["--version"]);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("0.2.0");
+    expect(result.stderr).toBe("");
+  });
+
   it("returns structured JSON and zero for a valid specification", () => {
     const result = run(["validate", "examples/hotel-booking/backend.yaml", "--json"]);
     expect(result.status).toBe(0);
@@ -89,6 +96,52 @@ describe("backendgen subprocess contract", () => {
     expect(JSON.parse(overwrite.stdout)).toMatchObject({
       success: false,
       error: expect.stringContaining("Refusing to overwrite"),
+    });
+  });
+
+  it("exports both public schemas, refuses unknown names, and never overwrites", async () => {
+    const directory = await temporaryDirectory();
+
+    const toStdout = run(["export-schema", "spec"]);
+    expect(toStdout.status).toBe(0);
+    expect(JSON.parse(toStdout.stdout)).toMatchObject({
+      $id: "https://backendcompiler.dev/schema/backend-spec.v1.schema.json",
+    });
+
+    const specOut = join(directory, "backend-spec.v1.schema.json");
+    const wrote = run(["export-schema", "spec", "--output", specOut, "--json"]);
+    expect(wrote.status).toBe(0);
+    expect(JSON.parse(wrote.stdout)).toEqual({
+      written: specOut,
+      schema: "spec",
+      schemaId: "https://backendcompiler.dev/schema/backend-spec.v1.schema.json",
+    });
+    expect(JSON.parse(await readFile(specOut, "utf8"))).toMatchObject({
+      title: "Backend Compiler Specification v1",
+    });
+
+    const frontendOut = join(directory, "frontend-contract.v1.schema.json");
+    const frontend = run(["export-schema", "frontend", "--output", frontendOut, "--json"]);
+    expect(frontend.status).toBe(0);
+    expect(JSON.parse(await readFile(frontendOut, "utf8"))).toMatchObject({
+      $id: "https://backendcompiler.dev/schema/frontend-contract.v1.schema.json",
+      properties: expect.objectContaining({
+        schemaVersion: { const: "backendcompiler.dev/frontend-contract/v1" },
+      }),
+    });
+
+    const overwrite = run(["export-schema", "spec", "--output", specOut, "--json"]);
+    expect(overwrite.status).toBe(1);
+    expect(JSON.parse(overwrite.stdout)).toMatchObject({
+      success: false,
+      error: expect.stringContaining("Refusing to overwrite"),
+    });
+
+    const unknown = run(["export-schema", "everything", "--json"]);
+    expect(unknown.status).toBe(1);
+    expect(JSON.parse(unknown.stdout)).toMatchObject({
+      success: false,
+      error: expect.stringContaining("frontend, spec"),
     });
   });
 

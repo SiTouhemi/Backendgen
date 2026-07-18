@@ -21,6 +21,12 @@ The cluster and all generated test projects live under the system temporary
 directory and are removed in a `finally` block. No existing PostgreSQL cluster
 or application database is touched.
 
+The render-only security property suite needs no PostgreSQL installation. Run
+the default 250-seed gate with `npm run test:fuzz`, or the complete sharded
+2,000-seed gate with `npm run test:fuzz:ci`. See the
+[generated security contract](FUZZ_SECURITY_CONTRACT.md) for deterministic
+single-seed replay.
+
 To run selected scenarios or use another port:
 
 ```powershell

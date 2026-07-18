@@ -107,6 +107,8 @@ function envExample(context: TargetRenderContext, contributions: RenderResult): 
     "",
     "NODE_ENV=development",
     `PORT=${context.settings.port}`,
+    "# Comma-separated exact browser origins. Leave empty to keep CORS disabled.",
+    "CORS_ORIGINS=",
     "SWAGGER_ENABLED=false",
     "TRUST_PROXY_HOPS=0",
     "",

@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "backendcompiler.dev/expansion-result/v1",
+  "generatorVersion": "0.2.0",
+  "note": "Deterministic representation expansion only; this is not an observed AI token benchmark.",
+  "scenarios": [
+    {
+      "scenario": "todo-crud",
+      "specification": "examples/notes-api/backend.yaml",
+      "specLines": 26,
+      "specBytes": 469,
+      "generatedFiles": 54,
+      "generatedLines": 2201,
+      "generatedBytes": 65158,
+      "lineExpansion": 84.7,
+      "byteExpansion": 138.9
+    },
+    {
+      "scenario": "authentication",
+      "specification": "examples/auth-notes/backend.yaml",
+      "specLines": 46,
+      "specBytes": 1096,
+      "generatedFiles": 71,
+      "generatedLines": 3617,
+      "generatedBytes": 108170,
+      "lineExpansion": 78.6,
+      "byteExpansion": 98.7
+    },
+    {
+      "scenario": "multi-tenant-saas",
+      "specification": "examples/saas-tasks/backend.yaml",
+      "specLines": 61,
+      "specBytes": 1187,
+      "generatedFiles": 90,
+      "generatedLines": 5664,
+      "generatedBytes": 171398,
+      "lineExpansion": 92.9,
+      "byteExpansion": 144.4
+    },
+    {
+      "scenario": "hotel-booking",
+      "specification": "examples/hotel-booking/backend.yaml",
+      "specLines": 73,
+      "specBytes": 1553,
+      "generatedFiles": 107,
+      "generatedLines": 7781,
+      "generatedBytes": 238544,
+      "lineExpansion": 106.6,
+      "byteExpansion": 153.6
+    },
+    {
+      "scenario": "appointment-scheduling",
+      "specification": "examples/appointments/backend.yaml",
+      "specLines": 44,
+      "specBytes": 864,
+      "generatedFiles": 80,
+      "generatedLines": 5127,
+      "generatedBytes": 155878,
+      "lineExpansion": 116.5,
+      "byteExpansion": 180.4
+    }
+  ]
+}

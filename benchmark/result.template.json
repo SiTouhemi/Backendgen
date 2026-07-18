@@ -1,18 +1,47 @@
 {
-  "schemaVersion": "backendcompiler.dev/benchmark-result/v1",
+  "schemaVersion": "backendcompiler.dev/benchmark-result/v2",
   "scenario": "todo-crud",
   "arm": "compiler",
   "model": "REPLACE_WITH_EXACT_MODEL_VERSION",
+  "agent": {
+    "name": "REPLACE_WITH_AGENT_OR_TOOL_NAME",
+    "version": "REPLACE_WITH_AGENT_VERSION"
+  },
+  "pairId": "REPLACE_WITH_SHARED_PAIR_ID",
+  "pairPosition": "independent",
   "runId": "REPLACE_WITH_UNIQUE_RUN_ID",
+  "protocol": {
+    "promptFile": "REPLACE_WITH_PATH_TO_EXACT_PROMPT",
+    "requirementsFile": "REPLACE_WITH_PATH_TO_SHARED_REQUIREMENTS",
+    "suppliedContext": "none",
+    "startingRepoState": "empty directory",
+    "maxAttempts": 3,
+    "environment": {
+      "machine": "REPLACE_WITH_NON_SENSITIVE_MACHINE_LABEL",
+      "os": "REPLACE_WITH_OS_AND_VERSION",
+      "nodeVersion": "REPLACE_WITH_NODE_VERSION",
+      "dependencyCacheState": "REPLACE_WITH_CACHE_STATE",
+      "toolPermissions": "REPLACE_WITH_TOOL_PERMISSION_PROFILE"
+    }
+  },
   "measurements": {
+    "attempts": 1,
     "inputTokens": null,
+    "cachedInputTokens": null,
     "outputTokens": null,
     "toolCallTokens": null,
-    "wallClockMs": null,
-    "agentWrittenFiles": null,
-    "generatedFiles": null,
-    "humanCorrections": null,
-    "generatedCodeRewrites": null
+    "wallClockMs": 0,
+    "agentWrittenFiles": 0,
+    "agentWrittenLines": 0,
+    "generatedFiles": 0,
+    "generatedLines": 0,
+    "humanCorrections": 0,
+    "generatedCodeRewrites": 0
   },
-  "outcome": { "buildPassed": false, "testsPassed": false, "notes": "Template only; not an observed result." }
+  "outcome": {
+    "buildPassed": false,
+    "testsPassed": false,
+    "functionalChecksPassed": false,
+    "notes": "Template only; not an observed result."
+  }
 }

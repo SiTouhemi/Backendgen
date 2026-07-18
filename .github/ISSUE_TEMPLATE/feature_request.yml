@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a specification capability, feature pack behavior, or tooling improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [ROADMAP.md](../../ROADMAP.md) first. A second backend target and hosted SaaS infrastructure are out of scope for the 0.2 alpha. Do not include private customer specifications or secrets.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to build and where BackendGen falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: How the specification, CLI, or MCP tools would express it. A sketch of the `backend.yaml` shape helps.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: How you solve it now (custom scaffold files, manual code, another tool).
+    validations:
+      required: false

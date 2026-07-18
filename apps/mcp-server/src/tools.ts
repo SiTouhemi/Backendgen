@@ -1,4 +1,4 @@
-import { GENERATOR_NAME, GENERATOR_VERSION, type Issue } from "@backend-compiler/common";
+import { GENERATOR_NAME, GENERATOR_VERSION } from "@backend-compiler/common";
 import {
   compileBackend,
   createDefaultRegistry,
@@ -16,7 +16,11 @@ import {
   type BackendSpec,
 } from "@backend-compiler/specification";
 import { IR_VERSION } from "@backend-compiler/compiler";
+import { validateToolArguments } from "./arguments.js";
+import { TOOL_ERROR_CODES, ToolError } from "./definitions.js";
 import { Sandbox } from "./sandbox.js";
+
+export { TOOL_DEFINITIONS, TOOL_ERROR_CODES, ToolError } from "./definitions.js";
 
 /** Hard ceiling on how many paths any response may carry. Agents get counts, not dumps. */
 const MAX_LISTED_PATHS = 40;
@@ -34,141 +38,6 @@ export function createToolContext(sandbox: Sandbox): ToolContext {
     targets: createDefaultTargets(),
   };
 }
-
-export class ToolError extends Error {
-  readonly issues: readonly Issue[];
-
-  constructor(message: string, issues: readonly Issue[] = []) {
-    super(message);
-    this.name = "ToolError";
-    this.issues = issues;
-  }
-}
-
-const SPEC_INPUT = {
-  specPath: {
-    type: "string",
-    description: "Path to a YAML or JSON specification, inside an allowed root.",
-  },
-  spec: {
-    type: "object",
-    description: "The specification inline, as an object. Use this or specPath, not both.",
-  },
-} as const;
-
-export const TOOL_DEFINITIONS = [
-  {
-    name: "get_capabilities",
-    description:
-      "What this compiler can generate: specification version, targets, features and response limits. Call this first.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "list_targets",
-    description: "Backend targets this compiler can generate, with their supported databases.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "describe_target",
-    description: "Full detail for one target: databases, capabilities and project commands.",
-    inputSchema: {
-      type: "object",
-      properties: { targetId: { type: "string" } },
-      required: ["targetId"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "list_features",
-    description:
-      "Feature packs available, with their dependencies and conflicts. Use describe_feature for the configuration schema.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "describe_feature",
-    description:
-      "One feature's configuration JSON Schema, dependencies, conflicts and worked examples.",
-    inputSchema: {
-      type: "object",
-      properties: { feature: { type: "string" } },
-      required: ["feature"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "validate_spec",
-    description:
-      "Validate a specification. Returns stable error codes and JSON pointers, so a failure can be fixed without guessing.",
-    inputSchema: { type: "object", properties: SPEC_INPUT, additionalProperties: false },
-  },
-  {
-    name: "inspect_spec",
-    description:
-      "Compile a specification and return the normalized backend IR: entities, endpoints, events, secrets and infrastructure.",
-    inputSchema: { type: "object", properties: SPEC_INPUT, additionalProperties: false },
-  },
-  {
-    name: "preview_generation",
-    description:
-      "Dry run: what generation would create, update, delete or refuse to overwrite. Writes nothing.",
-    inputSchema: {
-      type: "object",
-      properties: { ...SPEC_INPUT, outputPath: { type: "string" } },
-      required: ["outputPath"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "generate_backend",
-    description:
-      "Generate the backend. Refuses by default if a generated file was edited by hand; pass force to overwrite. Never overwrites src/custom/.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ...SPEC_INPUT,
-        outputPath: { type: "string" },
-        force: {
-          type: "boolean",
-          description: "Overwrite generated files that have local modifications.",
-        },
-      },
-      required: ["outputPath"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "run_generated_tests",
-    description:
-      "Run the generated project's test suites and return counts, not logs. Integration tests need a reachable database.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        outputPath: { type: "string" },
-        install: { type: "boolean", description: "Install dependencies first." },
-        integration: { type: "boolean", description: "Also run the integration suite." },
-      },
-      required: ["outputPath"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "get_generation_report",
-    description:
-      "Read the generation manifest of an already-generated project: versions, checksums and file ownership.",
-    inputSchema: {
-      type: "object",
-      properties: { outputPath: { type: "string" } },
-      required: ["outputPath"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "explain_customization_points",
-    description:
-      "Where to put custom code for a specification, and which interface each extension point expects.",
-    inputSchema: { type: "object", properties: SPEC_INPUT, additionalProperties: false },
-  },
-] as const;
 
 interface SpecArgs {
   specPath?: string;
@@ -195,6 +64,7 @@ async function loadSpec(context: ToolContext, args: SpecArgs): Promise<BackendSp
     throw new ToolError(
       "Specification is invalid",
       result.issues.map((issue) => ({ ...issue, severity: "error" as const })),
+      TOOL_ERROR_CODES.invalidSpec,
     );
   }
 
@@ -208,7 +78,7 @@ function compile(context: ToolContext, spec: BackendSpec) {
   });
 
   if (!compiled.ok) {
-    throw new ToolError("Specification is invalid", compiled.issues);
+    throw new ToolError("Specification is invalid", compiled.issues, TOOL_ERROR_CODES.invalidSpec);
   }
 
   return compiled.value;
@@ -225,8 +95,12 @@ function capped(paths: readonly string[]): { paths: string[]; total: number; tru
 export async function callTool(
   context: ToolContext,
   name: string,
-  rawArgs: Record<string, unknown>,
+  args: unknown,
 ): Promise<unknown> {
+  // Every call is checked against the exact JSON Schema advertised through
+  // tools/list before any tool logic or filesystem access runs.
+  const rawArgs = validateToolArguments(name, args);
+
   switch (name) {
     case "get_capabilities":
       return {
@@ -246,7 +120,7 @@ export async function callTool(
         limits: {
           maxListedPaths: MAX_LISTED_PATHS,
           fileContentsReturned: false,
-          allowedRoots: context.sandbox.roots,
+          allowedRootCount: context.sandbox.roots.length,
         },
         workflow: [
           "describe_feature to learn a feature's configuration",
@@ -395,7 +269,7 @@ export async function callTool(
       });
 
       if (!outcome.ok) {
-        throw new ToolError("Generation failed", outcome.issues);
+        throw new ToolError("Generation failed", outcome.issues, TOOL_ERROR_CODES.generationFailed);
       }
 
       const report = outcome.report;
@@ -462,6 +336,8 @@ export async function callTool(
       if (manifest === null) {
         throw new ToolError(
           `No generation manifest at '${outputDirectory}'. Run generate_backend first.`,
+          [],
+          TOOL_ERROR_CODES.manifestMissing,
         );
       }
 
@@ -509,6 +385,7 @@ export async function callTool(
     }
 
     default:
-      throw new ToolError(`Unknown tool '${name}'`);
+      // Unreachable: validateToolArguments already rejects unknown names.
+      throw new ToolError(`Unknown tool '${name}'`, [], TOOL_ERROR_CODES.unknownTool);
   }
 }

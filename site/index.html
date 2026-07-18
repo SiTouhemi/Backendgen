@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101a35" />
+    <meta
+      name="description"
+      content="BackendGen is the backend compiler for AI coding agents: agents express product logic as a compact spec, BackendGen generates the tested backend, and the agent connects the frontend."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="BackendGen — the backend compiler for AI coding agents" />
+    <meta
+      property="og:description"
+      content="The agent reasons about product logic. BackendGen compiles the repetitive backend."
+    />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="BackendGen — the backend compiler for AI coding agents" />
+    <meta
+      name="twitter:description"
+      content="The agent reasons about product logic. BackendGen compiles the repetitive backend."
+    />
+    <title>BackendGen — the backend compiler for AI coding agents</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./script.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="BackendGen home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>BackendGen</span>
+      </a>
+      <nav class="anchor-nav" aria-label="Main navigation">
+        <a href="#workflow">Workflow</a>
+        <a href="#proof">Proof</a>
+        <a href="#connect">Connect</a>
+      </nav>
+      <a class="header-cta pressable" href="#install">Give it to your agent <span aria-hidden="true">↘</span></a>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="status"><span aria-hidden="true"></span> v0.2 alpha · local-first · Apache-2.0</p>
+          <h1 id="hero-title">
+            <span class="headline-mask"><span>The agent <em>reasons.</em></span></span>
+            <span class="headline-mask"><span>BackendGen</span></span>
+            <span class="headline-mask"><span>generates.</span></span>
+          </h1>
+          <p class="lede">
+            Your coding agent turns product logic into a compact, versioned spec.
+            BackendGen compiles it into a tested NestJS, Prisma, and PostgreSQL
+            repository. The agent reads the frontend contract and finishes the app.
+          </p>
+          <div class="role-split" aria-label="Division of responsibility">
+            <span><b>Agent</b> logic + frontend integration</span>
+            <span><b>BackendGen</b> deterministic backend</span>
+          </div>
+          <div class="install-command pressable" id="install">
+            <code aria-label="npx backendgen init backend.yaml"><span class="prompt" aria-hidden="true">$</span><span class="command-text"> npx backendgen init backend.yaml</span><span class="terminal-cursor" aria-hidden="true"></span></code>
+            <button type="button" data-copy="npx backendgen init backend.yaml" aria-live="polite">
+              <span>Copy</span><span class="copied">Copied ✓</span>
+            </button>
+          </div>
+          <p class="availability">The npm command activates with the first public release.</p>
+        </div>
+
+        <div class="compiler-bench observe" aria-label="An AI agent writes a 46-line YAML specification, BackendGen compiles a 71-file backend repository, and the agent uses the frontend contract to connect the interface">
+          <div class="bench-label bench-label-input">01 / agent-written intent</div>
+          <article class="spec-sheet">
+            <div class="sheet-head"><span>backend.yaml</span><span>agent · 46 lines</span></div>
+            <pre><span class="key">project:</span>
+  <span class="key">name:</span> auth-api
+
+<span class="key">entities:</span>
+  <span class="type">Note:</span>
+    <span class="key">fields:</span>
+      <span class="type">title:</span> string
+      <span class="type">body:</span> text
+
+<span class="key">features:</span>
+  <span class="type">crud:</span>
+    <span class="key">ownedBy:</span> { Note: User }
+  <span class="type">auth:</span>
+    <span class="key">roles:</span> [admin, member]</pre>
+          </article>
+
+          <div class="compile-rail" aria-hidden="true">
+            <span class="rail-word stage-validate">VALIDATE</span>
+            <span class="rail-line"><i></i></span>
+            <span class="rail-word stage-normalize">NORMALIZE</span>
+            <span class="rail-line"><i></i></span>
+            <span class="rail-word stage-generate">GENERATE</span>
+          </div>
+
+          <div class="bench-label bench-label-output">02 / compiler output</div>
+          <div class="repo-stack">
+            <article class="repo-card repo-card-back">
+              <span>test/</span><strong>✓ unit + PostgreSQL suites</strong>
+            </article>
+            <article class="repo-card repo-card-mid">
+              <span>frontend-contract.json</span><strong>agent wires the UI from this</strong>
+            </article>
+            <article class="repo-card repo-card-front">
+              <div class="repo-head"><span>auth-api/</span><span>BackendGen · 71 files</span></div>
+              <ul>
+                <li><i>src/</i><b>NestJS modules</b></li>
+                <li><i>prisma/</i><b>schema + migrations</b></li>
+                <li><i>client/</i><b>typed TypeScript client</b></li>
+                <li><i>test/</i><b>unit + PostgreSQL suites</b></li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="workflow" id="workflow" aria-labelledby="workflow-title">
+        <div class="section-heading">
+          <p>The agent stays in control</p>
+          <h2 id="workflow-title">Reason in intent.<br />Compile the routine.</h2>
+        </div>
+        <div class="workflow-track observe">
+          <article class="workflow-step agent-step">
+            <span class="step-owner">AI agent</span>
+            <span class="step-number">01</span>
+            <h3>Understands the product</h3>
+            <p>Turns the conversation, frontend, and business rules into a compact <code>backendcompiler.dev/v1</code> specification.</p>
+          </article>
+          <article class="workflow-step compiler-step">
+            <span class="step-owner">BackendGen</span>
+            <span class="step-number">02</span>
+            <h3>Compiles the backend</h3>
+            <p>Validates intent, normalizes semantics, and generates the repository, migrations, tests, typed client, and contract.</p>
+          </article>
+          <article class="workflow-step agent-step">
+            <span class="step-owner">AI agent</span>
+            <span class="step-number">03</span>
+            <h3>Finishes the application</h3>
+            <p>Reads <code>frontend-contract.json</code>, connects the UI, and adds the product-specific behavior that should remain custom.</p>
+          </article>
+        </div>
+        <p class="workflow-boundary"><strong>BackendGen does not replace the agent.</strong> It gives the agent a reliable backend-generation primitive.</p>
+      </section>
+
+      <section class="proof" id="proof" aria-labelledby="proof-title">
+        <div class="section-heading">
+          <p>Measured in this repository</p>
+          <h2 id="proof-title">Small agent input.<br />Repository-scale output.</h2>
+        </div>
+        <div class="evidence-ledger observe">
+          <div class="ledger-row ledger-head">
+            <span>Release evidence</span><span>Current alpha</span><span>What it means</span>
+          </div>
+          <div class="ledger-row">
+            <strong><span data-count="2000">2,000</span></strong><span>seeded specs</span><p>Complete deterministic security-contract fuzz gate</p>
+          </div>
+          <div class="ledger-row">
+            <strong><span data-count="10">10</span></strong><span>full scenarios</span><p>Generation and regeneration across every feature mix</p>
+          </div>
+          <div class="ledger-row">
+            <strong><span data-count="26">26</span>–<span data-count="73">73</span></strong><span>spec lines</span><p>Expanded into 54–107 files in five measured examples</p>
+          </div>
+          <div class="ledger-row">
+            <strong><span data-count="12">12</span></strong><span>MCP tools</span><p>Bounded agent responses without source-code dumps</p>
+          </div>
+        </div>
+        <p class="proof-note">
+          This proves representation expansion, not token savings. Controlled direct-vs-compiler agent runs are required before we publish a token-reduction claim.
+        </p>
+      </section>
+
+      <section class="connect" id="connect" aria-labelledby="connect-title">
+        <div class="section-heading compact">
+          <p>Built for agent workflows</p>
+          <h2 id="connect-title">One compiler.<br />Three handoffs.</h2>
+        </div>
+        <div class="connection-map observe">
+          <div class="map-spine" aria-hidden="true">
+            <span class="map-node core">BackendGen</span>
+          </div>
+          <article>
+            <span class="channel">Local MCP</span>
+            <h3>Codex, Claude Code, and Cursor</h3>
+            <p>The agent validates, previews, generates, and tests through bounded MCP tools. Filesystem access stays inside an exact allowlist.</p>
+          </article>
+          <article>
+            <span class="channel">Agent Skill + CLI</span>
+            <h3>Teach the workflow once</h3>
+            <p>The reusable skill tells agents when to update the spec, preview regeneration, preserve custom code, and read the frontend contract.</p>
+          </article>
+          <article>
+            <span class="channel">Git handoff today</span>
+            <h3>Lovable and v0 projects</h3>
+            <p>Sync the frontend through GitHub, run BackendGen locally or in CI, then return the typed client and bounded contract to the web agent.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="principles observe" aria-labelledby="contract-title">
+        <div class="principle-mark" aria-hidden="true">{ }</div>
+        <div>
+          <p class="eyebrow">The responsibility split</p>
+          <h2 class="contract-quote" id="contract-title">The agent decides what the product means. BackendGen makes the repetitive backend predictable.</h2>
+        </div>
+        <ul>
+          <li><span>01</span>Agent owns logic and integration</li>
+          <li><span>02</span>Compiler owns repeatable generation</li>
+          <li><span>03</span>You own the generated repository</li>
+        </ul>
+      </section>
+
+      <section class="pricing" id="access" aria-labelledby="pricing-title">
+        <div class="section-heading compact">
+          <p>Alpha access</p>
+          <h2 id="pricing-title">Open compiler.<br />Real projects wanted.</h2>
+        </div>
+        <div class="price-grid">
+          <article class="price-main pressable">
+            <span class="price-label">Available at public release</span>
+            <h3>Local compiler</h3>
+            <p class="amount">$0</p>
+            <p>CLI, MCP server, Agent Skill, current feature packs, generated tests, typed client, and safe regeneration. Apache-2.0.</p>
+            <a href="#install">Give it to your agent <span aria-hidden="true">→</span></a>
+          </article>
+          <article class="price-future pressable">
+            <span class="price-label">Three guided alpha trials</span>
+            <h3>Design partner</h3>
+            <p class="amount amount-word">Free</p>
+            <p>Bring a real AI-built frontend. We test the agent-to-spec-to-backend workflow with you and use the evidence to improve the compiler.</p>
+            <a href="https://github.com/SiTouhemi/BackendCompiler/blob/main/docs/DESIGN_PARTNERS.md">See the trial contract <span aria-hidden="true">→</span></a>
+            <small>No production-readiness or token-savings promise during alpha.</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="closing" aria-labelledby="closing-title">
+        <p>Agent intent in. Auditable repository out.</p>
+        <h2 id="closing-title">Keep the agent on logic.<br />Compile the rest.</h2>
+        <div class="install-command inverse pressable">
+          <code><span class="prompt" aria-hidden="true">$</span> npx backendgen init backend.yaml</code>
+          <button type="button" data-copy="npx backendgen init backend.yaml" aria-live="polite">
+            <span>Copy</span><span class="copied">Copied ✓</span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>BackendGen</span></a>
+      <p>Backend compiler for AI coding agents.</p>
+      <p>Alpha · Apache-2.0</p>
+    </footer>
+  </body>
+</html>

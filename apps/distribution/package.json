@@ -1,0 +1,36 @@
+{
+  "name": "backendgen",
+  "version": "0.2.0",
+  "description": "Deterministic NestJS, Prisma, and PostgreSQL backend compiler for AI coding agents.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "backendgen": "./dist/backendgen.cjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "ai",
+    "backend",
+    "code-generation",
+    "mcp",
+    "nestjs",
+    "postgresql",
+    "prisma"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "prepack": "node ../../scripts/build-distribution.mjs"
+  }
+}

@@ -15,6 +15,8 @@
     "clean": "tsc -b --clean",
     "test": "npm run test:unit",
     "test:unit": "npm run build && vitest run --exclude \"**/*.e2e.test.ts\"",
+    "test:fuzz": "npm run build && vitest run tests/fuzz-invariants.test.ts",
+    "test:fuzz:ci": "npm run build && node scripts/run-fuzz-shards.mjs",
     "test:e2e": "npm run build && vitest run --config vitest.e2e.config.ts",
     "cli": "npm run build --silent && node apps/cli/dist/src/index.js",
     "validate:example": "npm run cli -- validate examples/hotel-booking/backend.yaml",
@@ -23,12 +25,23 @@
     "mcp": "npm run build --silent && node apps/mcp-server/dist/src/index.js",
     "verify:local:postgres": "powershell -ExecutionPolicy Bypass -File scripts/verify-local.ps1",
     "licenses": "node scripts/license-report.mjs",
-    "benchmark:validate": "node benchmark/validate-results.mjs"
+    "benchmark:validate": "node benchmark/validate-results.mjs",
+    "benchmark:expansion": "npm run build && node benchmark/measure-expansion.mjs",
+    "benchmark:expansion:check": "npm run build && node benchmark/measure-expansion.mjs --check",
+    "benchmark:summarize": "node benchmark/summarize-results.mjs",
+    "bundle:distribution": "npm run build && node scripts/build-distribution.mjs",
+    "pack:distribution": "npm run bundle:distribution && npm pack --workspace backendgen && npm pack --workspace backendgen-mcp",
+    "test:distribution": "node scripts/test-distribution.mjs",
+    "check:release": "node scripts/check-release-consistency.mjs",
+    "prepare:mcp-registry": "node scripts/prepare-mcp-registry.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "ajv": "^8.20.0",
+    "esbuild": "0.28.1",
     "typescript": "^5.8.3",
-    "vitest": "^3.1.1"
+    "vitest": "^3.1.1",
+    "yaml": "^2.9.0"
   },
   "engines": {
     "node": ">=22"

@@ -58,7 +58,7 @@ export class Sandbox {
 
     if (!contained) {
       throw new SandboxError(
-        `Path '${candidate}' is outside the allowed roots: ${this.roots.join(", ")}. ` +
+        `Path '${candidate}' is outside the configured sandbox. ` +
           "Set BACKENDGEN_ALLOWED_ROOTS to widen access deliberately.",
       );
     }
@@ -67,16 +67,32 @@ export class Sandbox {
   }
 }
 
+/**
+ * Splits `BACKENDGEN_ALLOWED_ROOTS` into individual roots. `;` separates
+ * entries on every platform. `:` also separates entries, except on Windows,
+ * where a `:` followed by a path separator is a drive letter (`C:\projects`).
+ * POSIX absolute paths always start with `/`, so the drive-letter exception
+ * must not apply there — otherwise `/a:/b` would silently stay one bogus root.
+ */
+export function parseAllowedRoots(
+  configured: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const delimiter = platform === "win32" ? /[;:](?![\\/])/ : /[;:]/;
+
+  return configured
+    .split(delimiter)
+    .map((root) => root.trim())
+    .filter((root) => root.length > 0);
+}
+
 export function sandboxFromEnvironment(environment: NodeJS.ProcessEnv = process.env): Sandbox {
   const configured = environment.BACKENDGEN_ALLOWED_ROOTS;
 
   const roots =
     configured === undefined || configured.trim() === ""
       ? [process.cwd()]
-      : configured
-          .split(/[;:](?![\\/])/)
-          .map((root) => root.trim())
-          .filter((root) => root.length > 0);
+      : parseAllowedRoots(configured);
 
   return new Sandbox(roots);
 }
