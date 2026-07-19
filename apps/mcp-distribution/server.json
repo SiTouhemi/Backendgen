@@ -4,7 +4,7 @@
   "title": "BackendGen",
   "description": "Validate compact backend specs and generate tested NestJS, Prisma, and PostgreSQL repositories.",
   "repository": {
-    "url": "https://github.com/SiTouhemi/BackendCompiler",
+    "url": "https://github.com/SiTouhemi/BackendGen",
     "source": "github"
   },
   "version": "0.2.0",

@@ -36,11 +36,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/SiTouhemi/BackendCompiler.git"
+    "url": "https://github.com/SiTouhemi/BackendGen.git"
   },
-  "homepage": "https://github.com/SiTouhemi/BackendCompiler#readme",
+  "homepage": "https://github.com/SiTouhemi/BackendGen#readme",
   "bugs": {
-    "url": "https://github.com/SiTouhemi/BackendCompiler/issues"
+    "url": "https://github.com/SiTouhemi/BackendGen/issues"
   },
   "mcpName": "io.github.sitouhemi/backendgen"
 }
