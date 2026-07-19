@@ -55,6 +55,11 @@ for (const path of yamlFiles) {
 const serverJsonPath = resolve(root, "apps/mcp-distribution/server.json");
 if (existsSync(serverJsonPath)) {
   const server = JSON.parse(await readFile(serverJsonPath, "utf8"));
+  if (server.name !== "io.github.SiTouhemi/backendgen") {
+    failures.push(
+      `apps/mcp-distribution/server.json name is ${server.name ?? "missing"}, expected io.github.SiTouhemi/backendgen`,
+    );
+  }
   versions.push(["apps/mcp-distribution/server.json version", server.version]);
   versions.push(["apps/mcp-distribution/server.json packages[0].version", server.packages?.[0]?.version]);
   if (server.packages?.[0]?.identifier !== "@2hemi/backendgen-mcp") {

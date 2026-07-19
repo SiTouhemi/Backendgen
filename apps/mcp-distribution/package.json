@@ -1,6 +1,6 @@
 {
   "name": "@2hemi/backendgen-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local, token-conscious MCP server for the BackendGen backend compiler.",
   "license": "Apache-2.0",
   "type": "module",
@@ -42,5 +42,5 @@
   "bugs": {
     "url": "https://github.com/SiTouhemi/Backendgen/issues"
   },
-  "mcpName": "io.github.sitouhemi/backendgen"
+  "mcpName": "io.github.SiTouhemi/backendgen"
 }

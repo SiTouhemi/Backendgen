@@ -33,7 +33,10 @@ if (!/^[A-Za-z0-9._-]+$/.test(repositoryName)) {
   throw new Error("--github-repo contains unsupported characters");
 }
 
-const registryName = `io.github.${owner.toLowerCase()}/backendgen`;
+// GitHub OIDC namespace grants preserve the login's canonical case. The MCP
+// Registry compares this prefix case-sensitively (for example,
+// io.github.SiTouhemi/*), so lowercasing a valid GitHub owner breaks publish.
+const registryName = `io.github.${owner}/backendgen`;
 const repositoryUrl = `https://github.com/${owner}/${repositoryName}`;
 
 const packages = [];

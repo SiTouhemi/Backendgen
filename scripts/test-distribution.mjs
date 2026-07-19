@@ -294,7 +294,7 @@ try {
     cwd: consumerDirectory,
     capture: true,
   });
-  if (installedVersion.stdout.trim() !== "0.2.1") {
+  if (installedVersion.stdout.trim() !== "0.2.2") {
     throw new Error(`Installed backendgen command reported: ${installedVersion.stdout.trim()}`);
   }
 
@@ -322,7 +322,7 @@ try {
     cwd: consumerDirectory,
     capture: true,
   });
-  if (version.stdout.trim() !== "0.2.1") {
+  if (version.stdout.trim() !== "0.2.2") {
     throw new Error(`Packaged CLI reported unexpected version: ${version.stdout.trim()}`);
   }
   await run(process.execPath, [cliEntry, "init", spec, "--name", "distribution-smoke"], {

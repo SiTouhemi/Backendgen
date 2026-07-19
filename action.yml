@@ -18,7 +18,7 @@ inputs:
   version:
     description: Exact public backendgen npm version to execute.
     required: false
-    default: 0.2.1
+    default: 0.2.2
   check:
     description: Fail when generation changes tracked or untracked files under output.
     required: false

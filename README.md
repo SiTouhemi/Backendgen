@@ -9,7 +9,7 @@ production use. Real projects are welcome through the
 [design-partner program](docs/DESIGN_PARTNERS.md); questions go through
 [SUPPORT.md](SUPPORT.md).
 
-Version 0.2.1 includes CRUD, authentication, organizations and tenant isolation,
+Version 0.2.2 includes CRUD, authentication, organizations and tenant isolation,
 reservations, notifications, webhooks, durable jobs, and presigned uploads. It
 also provides publishable `@2hemi/backendgen` and `@2hemi/backendgen-mcp` packages, twelve
 MCP tools, a generated frontend contract, and a reusable GitHub Action. FastAPI
@@ -56,7 +56,7 @@ tarballs instead. In this repository run `npm run pack:distribution`, copy the
 two `.tgz` files, then in any empty directory:
 
 ```sh
-npm install ./2hemi-backendgen-0.2.1.tgz ./2hemi-backendgen-mcp-0.2.1.tgz
+npm install ./2hemi-backendgen-0.2.2.tgz ./2hemi-backendgen-mcp-0.2.2.tgz
 npx backendgen init backend.yaml --name my-api
 ```
 

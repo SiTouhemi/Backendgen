@@ -84,7 +84,7 @@ must bootstrap both package names because npm trusted publishing can only be
 configured for packages that already exist. Create a short-lived granular npm
 token with publish access, store it as the GitHub environment secret
 `NPM_TOKEN`, create the protected `npm` environment, and publish GitHub release
-`v0.2.1`. The release workflow tests, publishes both npm packages, and submits
+`v0.2.2`. The release workflow tests, publishes both npm packages, and submits
 MCP Registry metadata.
 
 Review `server.json` carefully before that release. The official MCP Registry is

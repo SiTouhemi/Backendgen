@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 - 2026-07-19 (alpha)
+
+- Preserve the canonical `SiTouhemi` casing in the MCP server namespace. The
+  live registry's GitHub OIDC grant is case-sensitive and authorizes
+  `io.github.SiTouhemi/*`, so the lowercased 0.2.1 metadata could not be
+  registered even though both npm packages published successfully.
+- Add a release check for the exact registry namespace to prevent recurrence.
+
 ## 0.2.1 - 2026-07-19 (alpha)
 
 - Publish the CLI and MCP server under the owner-controlled public npm scope as

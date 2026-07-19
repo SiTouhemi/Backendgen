@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.sitouhemi/backendgen",
+  "name": "io.github.SiTouhemi/backendgen",
   "title": "BackendGen",
   "description": "Validate compact backend specs and generate tested NestJS, Prisma, and PostgreSQL repositories.",
   "repository": {
     "url": "https://github.com/SiTouhemi/Backendgen",
     "source": "github"
   },
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@2hemi/backendgen-mcp",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "transport": {
         "type": "stdio"
       },
