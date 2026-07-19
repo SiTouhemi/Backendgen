@@ -28,7 +28,7 @@ describe("backendgen subprocess contract", () => {
   it("reports the public generator version", () => {
     const result = run(["--version"]);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("0.2.0");
+    expect(result.stdout.trim()).toBe("0.2.1");
     expect(result.stderr).toBe("");
   });
 

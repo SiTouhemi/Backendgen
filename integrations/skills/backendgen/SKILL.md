@@ -24,10 +24,10 @@ Use BackendGen as the source-code engine. Write or edit the compact specificatio
 When MCP is unavailable, use:
 
 ```sh
-npx backendgen validate backend.yaml
-npx backendgen diff backend.yaml --output ./backend
-npx backendgen generate backend.yaml --output ./backend
-npx backendgen test-generated --output ./backend --install
+npx @2hemi/backendgen validate backend.yaml
+npx @2hemi/backendgen diff backend.yaml --output ./backend
+npx @2hemi/backendgen generate backend.yaml --output ./backend
+npx @2hemi/backendgen test-generated --output ./backend --install
 ```
 
 Add `--integration` only with a deliberate `DATABASE_URL`. Treat destructive or manual migrations as review gates; never pass `--allow-destructive`, `--accept-manual`, or `--force` without an explicit user decision.

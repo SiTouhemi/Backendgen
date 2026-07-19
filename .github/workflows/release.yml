@@ -54,10 +54,10 @@ jobs:
       - name: Publish CLI with npm provenance
         run: |
           version="${RELEASE_TAG#v}"
-          if npm view "backendgen@${version}" version >/dev/null 2>&1; then
-            echo "backendgen@${version} is already published; skipping"
+          if npm view "@2hemi/backendgen@${version}" version >/dev/null 2>&1; then
+            echo "@2hemi/backendgen@${version} is already published; skipping"
           else
-            npm publish --workspace backendgen --access public
+            npm publish --workspace @2hemi/backendgen --access public
           fi
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -65,10 +65,10 @@ jobs:
       - name: Publish MCP server with npm provenance
         run: |
           version="${RELEASE_TAG#v}"
-          if npm view "backendgen-mcp@${version}" version >/dev/null 2>&1; then
-            echo "backendgen-mcp@${version} is already published; skipping"
+          if npm view "@2hemi/backendgen-mcp@${version}" version >/dev/null 2>&1; then
+            echo "@2hemi/backendgen-mcp@${version} is already published; skipping"
           else
-            npm publish --workspace backendgen-mcp --access public
+            npm publish --workspace @2hemi/backendgen-mcp --access public
           fi
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}

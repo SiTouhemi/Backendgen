@@ -8,18 +8,18 @@ plus a typed TypeScript client.
 ## CLI
 
 ```sh
-npx backendgen init backend.yaml --name my-api
-npx backendgen validate backend.yaml
-npx backendgen generate backend.yaml --output ./backend
+npx @2hemi/backendgen init backend.yaml --name my-api
+npx @2hemi/backendgen validate backend.yaml
+npx @2hemi/backendgen generate backend.yaml --output ./backend
 ```
 
 Preview regeneration before writing:
 
 ```sh
-npx backendgen diff backend.yaml --output ./backend
+npx @2hemi/backendgen diff backend.yaml --output ./backend
 ```
 
-For agent integration, install the companion `backendgen-mcp` package.
+For agent integration, install the companion `@2hemi/backendgen-mcp` package.
 
 BackendGen is licensed under Apache-2.0. Generated projects belong to their
 users and have no BackendGen runtime dependency.

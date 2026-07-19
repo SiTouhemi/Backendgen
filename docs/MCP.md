@@ -1,7 +1,7 @@
 # MCP Server
 
 After the first public release, run the self-contained package with
-`npx -y backendgen-mcp`. A complete client-by-client guide is in
+`npx -y @2hemi/backendgen-mcp`. A complete client-by-client guide is in
 [AI builder integration](AI_BUILDERS.md).
 
 Build with `npm run build`, then run `node apps/mcp-server/dist/src/index.js`. The server uses stdio and requires no account or network listener. Set `BACKENDGEN_ALLOWED_ROOTS` to one or more deliberate filesystem roots; the current directory is the default. Separate multiple roots with `;` on any platform, or `:` between POSIX absolute paths (on Windows, `:` followed by `\` or `/` is treated as a drive letter, not a separator).
@@ -21,7 +21,7 @@ Published-package configuration:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "backendgen-mcp"],
+  "args": ["-y", "@2hemi/backendgen-mcp"],
   "env": { "BACKENDGEN_ALLOWED_ROOTS": "C:/path/projects" }
 }
 ```

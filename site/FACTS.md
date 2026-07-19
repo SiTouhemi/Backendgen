@@ -5,7 +5,7 @@ copy checklist, not a second product specification.
 
 ## Commands and output
 
-- Starter command: `npx backendgen init backend.yaml` (the public-package form
+- Starter command: `npx @2hemi/backendgen init backend.yaml` (the public-package form
   of `backendgen init [path]`, defined in `apps/cli/src/index.ts` and documented
   in `README.md`). The package is not described as available before the first
   public release.

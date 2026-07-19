@@ -9,7 +9,7 @@ Configure an MCP client to run:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "backendgen-mcp"],
+  "args": ["-y", "@2hemi/backendgen-mcp"],
   "env": {
     "BACKENDGEN_ALLOWED_ROOTS": "C:/path/to/projects"
   }

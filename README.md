@@ -9,9 +9,9 @@ production use. Real projects are welcome through the
 [design-partner program](docs/DESIGN_PARTNERS.md); questions go through
 [SUPPORT.md](SUPPORT.md).
 
-Version 0.2.0 includes CRUD, authentication, organizations and tenant isolation,
+Version 0.2.1 includes CRUD, authentication, organizations and tenant isolation,
 reservations, notifications, webhooks, durable jobs, and presigned uploads. It
-also provides publishable `backendgen` and `backendgen-mcp` executables, twelve
+also provides publishable `@2hemi/backendgen` and `@2hemi/backendgen-mcp` packages, twelve
 MCP tools, a generated frontend contract, and a reusable GitHub Action. FastAPI
 and hosted SaaS infrastructure are intentionally out of scope.
 
@@ -47,8 +47,8 @@ After the first npm release, the same workflow is available without cloning
 this monorepo:
 
 ```sh
-npx -y backendgen init backend.yaml --name my-api
-npx -y backendgen generate backend.yaml --output ./my-api
+npx -y @2hemi/backendgen init backend.yaml --name my-api
+npx -y @2hemi/backendgen generate backend.yaml --output ./my-api
 ```
 
 Before that release (for example as a design partner), install from packed
@@ -56,7 +56,7 @@ tarballs instead. In this repository run `npm run pack:distribution`, copy the
 two `.tgz` files, then in any empty directory:
 
 ```sh
-npm install ./backendgen-0.2.0.tgz ./backendgen-mcp-0.2.0.tgz
+npm install ./2hemi-backendgen-0.2.1.tgz ./2hemi-backendgen-mcp-0.2.1.tgz
 npx backendgen init backend.yaml --name my-api
 ```
 

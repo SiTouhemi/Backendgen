@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 - 2026-07-19 (alpha)
+
+- Publish the CLI and MCP server under the owner-controlled public npm scope as
+  `@2hemi/backendgen` and `@2hemi/backendgen-mcp`; npm rejected the unscoped
+  `backendgen` name as too similar to the existing `backend-gen` package.
+- Keep the installed executable names `backendgen` and `backendgen-mcp`, update
+  every install/configuration example, and add release checks for the scoped
+  package names and MCP Registry identifier.
+
 ## Unreleased
 
 - Extend the paired benchmark contract to v2: exact agent/tool version, prompt

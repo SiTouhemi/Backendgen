@@ -1,6 +1,6 @@
 {
   "name": "backend-compiler",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -30,7 +30,7 @@
     "benchmark:expansion:check": "npm run build && node benchmark/measure-expansion.mjs --check",
     "benchmark:summarize": "node benchmark/summarize-results.mjs",
     "bundle:distribution": "npm run build && node scripts/build-distribution.mjs",
-    "pack:distribution": "npm run bundle:distribution && npm pack --workspace backendgen && npm pack --workspace backendgen-mcp",
+    "pack:distribution": "npm run bundle:distribution && npm pack --workspace @2hemi/backendgen && npm pack --workspace @2hemi/backendgen-mcp",
     "test:distribution": "node scripts/test-distribution.mjs",
     "check:release": "node scripts/check-release-consistency.mjs",
     "prepare:mcp-registry": "node scripts/prepare-mcp-registry.mjs"

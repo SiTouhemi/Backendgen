@@ -1,11 +1,11 @@
 {
-  "name": "backendgen-mcp",
-  "version": "0.2.0",
+  "name": "@2hemi/backendgen-mcp",
+  "version": "0.2.1",
   "description": "Local, token-conscious MCP server for the BackendGen backend compiler.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "backendgen-mcp": "./dist/backendgen-mcp.cjs"
+    "backendgen-mcp": "dist/backendgen-mcp.cjs"
   },
   "files": [
     "dist",
@@ -36,7 +36,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/SiTouhemi/Backendgen.git"
+    "url": "git+https://github.com/SiTouhemi/Backendgen.git"
   },
   "homepage": "https://github.com/SiTouhemi/Backendgen#readme",
   "bugs": {

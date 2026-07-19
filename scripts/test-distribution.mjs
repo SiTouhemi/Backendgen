@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -11,6 +11,8 @@ if (npmCli === undefined) {
 const temporary = await mkdtemp(join(tmpdir(), "backendgen-distribution-"));
 const packageDirectory = join(temporary, "packages");
 const consumerDirectory = join(temporary, "consumer");
+const CLI_PACKAGE = "@2hemi/backendgen";
+const MCP_PACKAGE = "@2hemi/backendgen-mcp";
 
 function run(command, args, options = {}) {
   return new Promise((resolvePromise, reject) => {
@@ -50,8 +52,8 @@ function runNpm(args, options = {}) {
 // Exact contents each public tarball may ship. Anything else — TypeScript
 // sources, .env files, fixtures, logs, maps — fails the smoke test.
 const TARBALL_ALLOWLISTS = {
-  backendgen: new Set(["package.json", "README.md", "LICENSE", "NOTICE", "dist/backendgen.cjs"]),
-  "backendgen-mcp": new Set([
+  [CLI_PACKAGE]: new Set(["package.json", "README.md", "LICENSE", "NOTICE", "dist/backendgen.cjs"]),
+  [MCP_PACKAGE]: new Set([
     "package.json",
     "README.md",
     "LICENSE",
@@ -63,8 +65,8 @@ const TARBALL_ALLOWLISTS = {
 };
 
 const TARBALL_REQUIRED_FILES = {
-  backendgen: ["package.json", "README.md", "LICENSE", "NOTICE", "dist/backendgen.cjs"],
-  "backendgen-mcp": [
+  [CLI_PACKAGE]: ["package.json", "README.md", "LICENSE", "NOTICE", "dist/backendgen.cjs"],
+  [MCP_PACKAGE]: [
     "package.json",
     "README.md",
     "LICENSE",
@@ -274,8 +276,8 @@ try {
   await mkdir(packageDirectory);
   await mkdir(consumerDirectory);
 
-  const cliPackage = await pack("backendgen");
-  const mcpPackage = await pack("backendgen-mcp");
+  const cliPackage = await pack(CLI_PACKAGE);
+  const mcpPackage = await pack(MCP_PACKAGE);
 
   await runNpm(["init", "--yes"], { cwd: consumerDirectory });
   await runNpm(
@@ -283,10 +285,31 @@ try {
     { cwd: consumerDirectory },
   );
 
-  const cliEntry = join(consumerDirectory, "node_modules", "backendgen", "dist", "backendgen.cjs");
+  // Verify npm created both executable shims. Directly invoking bundle paths
+  // alone would miss broken or normalized-away public `bin` metadata.
+  const shimSuffix = process.platform === "win32" ? ".cmd" : "";
+  await access(join(consumerDirectory, "node_modules", ".bin", `backendgen${shimSuffix}`));
+  await access(join(consumerDirectory, "node_modules", ".bin", `backendgen-mcp${shimSuffix}`));
+  const installedVersion = await runNpm(["exec", "--", "backendgen", "--version"], {
+    cwd: consumerDirectory,
+    capture: true,
+  });
+  if (installedVersion.stdout.trim() !== "0.2.1") {
+    throw new Error(`Installed backendgen command reported: ${installedVersion.stdout.trim()}`);
+  }
+
+  const cliEntry = join(
+    consumerDirectory,
+    "node_modules",
+    "@2hemi",
+    "backendgen",
+    "dist",
+    "backendgen.cjs",
+  );
   const mcpEntry = join(
     consumerDirectory,
     "node_modules",
+    "@2hemi",
     "backendgen-mcp",
     "dist",
     "backendgen-mcp.cjs",
@@ -299,7 +322,7 @@ try {
     cwd: consumerDirectory,
     capture: true,
   });
-  if (version.stdout.trim() !== "0.2.0") {
+  if (version.stdout.trim() !== "0.2.1") {
     throw new Error(`Packaged CLI reported unexpected version: ${version.stdout.trim()}`);
   }
   await run(process.execPath, [cliEntry, "init", spec, "--name", "distribution-smoke"], {

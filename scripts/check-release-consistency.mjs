@@ -26,8 +26,16 @@ const versionSource = await readFile(resolve(root, "packages/common/src/version.
 const generatorVersion = versionSource.match(/GENERATOR_VERSION = "([^"]+)"/)?.[1];
 versions.push(["packages/common/src/version.ts GENERATOR_VERSION", generatorVersion]);
 
-for (const path of ["apps/distribution/package.json", "apps/mcp-distribution/package.json"]) {
-  versions.push([path, (await json(path)).version]);
+const publicPackages = [
+  ["apps/distribution/package.json", "@2hemi/backendgen"],
+  ["apps/mcp-distribution/package.json", "@2hemi/backendgen-mcp"],
+];
+for (const [path, expectedName] of publicPackages) {
+  const packageJson = await json(path);
+  versions.push([path, packageJson.version]);
+  if (packageJson.name !== expectedName) {
+    failures.push(`${path} name is ${packageJson.name ?? "missing"}, expected ${expectedName}`);
+  }
 }
 
 const yamlFiles = ["action.yml", ".github/workflows/ci.yml", ".github/workflows/release.yml"];
@@ -49,6 +57,11 @@ if (existsSync(serverJsonPath)) {
   const server = JSON.parse(await readFile(serverJsonPath, "utf8"));
   versions.push(["apps/mcp-distribution/server.json version", server.version]);
   versions.push(["apps/mcp-distribution/server.json packages[0].version", server.packages?.[0]?.version]);
+  if (server.packages?.[0]?.identifier !== "@2hemi/backendgen-mcp") {
+    failures.push(
+      `apps/mcp-distribution/server.json packages[0].identifier is ${server.packages?.[0]?.identifier ?? "missing"}, expected @2hemi/backendgen-mcp`,
+    );
+  }
   // The MCP Registry server schema (2025-12-11) rejects publishes with
   // description > 100 or title > 100 characters; catch that before the
   // release workflow reaches mcp-publisher.

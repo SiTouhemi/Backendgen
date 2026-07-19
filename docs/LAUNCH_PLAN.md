@@ -70,7 +70,7 @@ runtime royalties, or a subscription that only wraps the free local binary.
 ### Maintainer runs before the first tag
 
 ```sh
-npm run prepare:mcp-registry -- OWNER backend-compiler
+npm run prepare:mcp-registry -- SiTouhemi Backendgen
 npm ci
 npm test
 npm run test:fuzz:ci
@@ -84,7 +84,7 @@ must bootstrap both package names because npm trusted publishing can only be
 configured for packages that already exist. Create a short-lived granular npm
 token with publish access, store it as the GitHub environment secret
 `NPM_TOKEN`, create the protected `npm` environment, and publish GitHub release
-`v0.2.0`. The release workflow tests, publishes both npm packages, and submits
+`v0.2.1`. The release workflow tests, publishes both npm packages, and submits
 MCP Registry metadata.
 
 Review `server.json` carefully before that release. The official MCP Registry is
@@ -95,17 +95,18 @@ Immediately after that first release:
 
 ```sh
 npm install --global npm@11
-npm trust github backendgen --repo OWNER/backend-compiler --file release.yml --env npm --allow-publish
-npm trust github backendgen-mcp --repo OWNER/backend-compiler --file release.yml --env npm --allow-publish
+npm trust github @2hemi/backendgen --repo SiTouhemi/Backendgen --file release.yml --env npm --allow-publish
+npm trust github @2hemi/backendgen-mcp --repo SiTouhemi/Backendgen --file release.yml --env npm --allow-publish
 ```
 
 Then delete the `NPM_TOKEN` secret and revoke the bootstrap token. Future
 releases use short-lived GitHub OIDC credentials and npm provenance. Protect
 release tags and require approval on the `npm` GitHub environment.
 
-Package names `backendgen` and `backendgen-mcp` returned not-found from the npm
-registry on 2026-07-18, but availability is not reserved until the first
-successful publish. Recheck immediately before release.
+The unscoped `backendgen` name was rejected by npm as too similar to the
+existing `backend-gen` package during the 0.2.0 bootstrap attempt. The release
+therefore uses the owner-controlled public packages `@2hemi/backendgen` and
+`@2hemi/backendgen-mcp` from 0.2.1 onward.
 
 ### Human validation before calling it stable
 

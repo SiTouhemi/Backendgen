@@ -18,7 +18,7 @@ inputs:
   version:
     description: Exact public backendgen npm version to execute.
     required: false
-    default: 0.2.0
+    default: 0.2.1
   check:
     description: Fail when generation changes tracked or untracked files under output.
     required: false
@@ -51,7 +51,7 @@ runs:
         BACKENDGEN_ACTION_INTEGRATION: ${{ inputs.integration-tests }}
       run: |
         set -euo pipefail
-        runner=(npm exec --yes --package "backendgen@${BACKENDGEN_ACTION_VERSION}" -- backendgen)
+        runner=(npm exec --yes --package "@2hemi/backendgen@${BACKENDGEN_ACTION_VERSION}" -- backendgen)
         "${runner[@]}" validate "${BACKENDGEN_ACTION_SPEC}"
         "${runner[@]}" generate "${BACKENDGEN_ACTION_SPEC}" --output "${BACKENDGEN_ACTION_OUTPUT}"
 

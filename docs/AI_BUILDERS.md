@@ -3,7 +3,7 @@
 BackendGen is distributed as two local npm executables:
 
 - `backendgen` is the human- and CI-facing CLI.
-- `backendgen-mcp` exposes concise compiler tools to coding agents over stdio.
+- `@2hemi/backendgen-mcp` exposes concise compiler tools to coding agents over stdio.
 
 Both packages contain self-contained executables, require Node.js 22 or newer,
 and generate source code that has no BackendGen runtime dependency. The npm
@@ -12,9 +12,9 @@ commands below become available after the first public release.
 ## Fastest local setup
 
 ```sh
-npx -y backendgen init backend.yaml --name my-api
-npx -y backendgen validate backend.yaml
-npx -y backendgen generate backend.yaml --output ./backend
+npx -y @2hemi/backendgen init backend.yaml --name my-api
+npx -y @2hemi/backendgen validate backend.yaml
+npx -y @2hemi/backendgen generate backend.yaml --output ./backend
 ```
 
 Give an MCP server only the directories it should access. Multiple roots use
@@ -25,7 +25,7 @@ the platform path delimiter (`:` on macOS/Linux and `;` on Windows).
   "mcpServers": {
     "backendgen": {
       "command": "npx",
-      "args": ["-y", "backendgen-mcp"],
+      "args": ["-y", "@2hemi/backendgen-mcp"],
       "env": {
         "BACKENDGEN_ALLOWED_ROOTS": "/absolute/path/to/projects"
       }
@@ -43,7 +43,7 @@ Codex CLI, the Codex IDE extension, and the ChatGPT desktop app share MCP
 configuration. Add the local server with:
 
 ```sh
-codex mcp add backendgen --env BACKENDGEN_ALLOWED_ROOTS=/absolute/path/to/projects -- npx -y backendgen-mcp
+codex mcp add backendgen --env BACKENDGEN_ALLOWED_ROOTS=/absolute/path/to/projects -- npx -y @2hemi/backendgen-mcp
 codex mcp list
 ```
 
@@ -53,14 +53,14 @@ Or add this to `~/.codex/config.toml` (personal) or `.codex/config.toml`
 ```toml
 [mcp_servers.backendgen]
 command = "npx"
-args = ["-y", "backendgen-mcp"]
+args = ["-y", "@2hemi/backendgen-mcp"]
 env = { BACKENDGEN_ALLOWED_ROOTS = "/absolute/path/to/projects" }
 startup_timeout_sec = 20.0
 tool_timeout_sec = 120.0
 ```
 
 For native Windows, use `command = "cmd"` and
-`args = ["/c", "npx", "-y", "backendgen-mcp"]`. Restart the client and use
+`args = ["/c", "npx", "-y", "@2hemi/backendgen-mcp"]`. Restart the client and use
 `/mcp` to verify the connection. This follows the official
 [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp).
 
@@ -77,10 +77,10 @@ Claude Code can register the same server at user or project scope:
 ```sh
 claude mcp add backendgen --scope project \
   --env BACKENDGEN_ALLOWED_ROOTS=/absolute/path/to/projects \
-  -- npx -y backendgen-mcp
+  -- npx -y @2hemi/backendgen-mcp
 ```
 
-On native Windows, use `-- cmd /c npx -y backendgen-mcp`. Other desktop coding
+On native Windows, use `-- cmd /c npx -y @2hemi/backendgen-mcp`. Other desktop coding
 clients that accept the standard `mcpServers` JSON can use the generic example
 above. Review and approve project-scoped MCP configuration before enabling it.
 
