@@ -61,7 +61,6 @@ jobs:
           fi
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish MCP server with npm provenance
         run: |
           version="${RELEASE_TAG#v}"
@@ -72,7 +71,6 @@ jobs:
           fi
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Install verified MCP Registry publisher
         working-directory: apps/mcp-distribution
         run: |
