@@ -9,10 +9,10 @@
       "specLines": 26,
       "specBytes": 469,
       "generatedFiles": 54,
-      "generatedLines": 2201,
-      "generatedBytes": 65158,
-      "lineExpansion": 84.7,
-      "byteExpansion": 138.9
+      "generatedLines": 2243,
+      "generatedBytes": 66949,
+      "lineExpansion": 86.3,
+      "byteExpansion": 142.7
     },
     {
       "scenario": "authentication",
@@ -20,10 +20,10 @@
       "specLines": 46,
       "specBytes": 1096,
       "generatedFiles": 71,
-      "generatedLines": 3617,
-      "generatedBytes": 108170,
-      "lineExpansion": 78.6,
-      "byteExpansion": 98.7
+      "generatedLines": 3659,
+      "generatedBytes": 109961,
+      "lineExpansion": 79.5,
+      "byteExpansion": 100.3
     },
     {
       "scenario": "multi-tenant-saas",
@@ -31,10 +31,10 @@
       "specLines": 61,
       "specBytes": 1187,
       "generatedFiles": 90,
-      "generatedLines": 5664,
-      "generatedBytes": 171398,
-      "lineExpansion": 92.9,
-      "byteExpansion": 144.4
+      "generatedLines": 5706,
+      "generatedBytes": 173170,
+      "lineExpansion": 93.5,
+      "byteExpansion": 145.9
     },
     {
       "scenario": "hotel-booking",
@@ -42,10 +42,10 @@
       "specLines": 73,
       "specBytes": 1553,
       "generatedFiles": 107,
-      "generatedLines": 7781,
-      "generatedBytes": 238544,
-      "lineExpansion": 106.6,
-      "byteExpansion": 153.6
+      "generatedLines": 7823,
+      "generatedBytes": 240335,
+      "lineExpansion": 107.2,
+      "byteExpansion": 154.8
     },
     {
       "scenario": "appointment-scheduling",
@@ -53,10 +53,10 @@
       "specLines": 44,
       "specBytes": 864,
       "generatedFiles": 80,
-      "generatedLines": 5127,
-      "generatedBytes": 155878,
-      "lineExpansion": 116.5,
-      "byteExpansion": 180.4
+      "generatedLines": 5169,
+      "generatedBytes": 157669,
+      "lineExpansion": 117.5,
+      "byteExpansion": 182.5
     }
   ]
 }

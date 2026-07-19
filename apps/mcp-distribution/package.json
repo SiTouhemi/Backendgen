@@ -33,5 +33,14 @@
   },
   "scripts": {
     "prepack": "node ../../scripts/build-distribution.mjs"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SiTouhemi/BackendCompiler.git"
+  },
+  "homepage": "https://github.com/SiTouhemi/BackendCompiler#readme",
+  "bugs": {
+    "url": "https://github.com/SiTouhemi/BackendCompiler/issues"
+  },
+  "mcpName": "io.github.sitouhemi/backendgen"
 }

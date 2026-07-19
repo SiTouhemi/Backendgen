@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.sitouhemi/backendgen",
+  "title": "BackendGen",
+  "description": "Validate compact backend specs and generate tested NestJS, Prisma, and PostgreSQL repositories.",
+  "repository": {
+    "url": "https://github.com/SiTouhemi/BackendCompiler",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "backendgen-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BACKENDGEN_ALLOWED_ROOTS",
+          "description": "Optional list of filesystem roots BackendGen may read and write, separated by ';' (or ':' between POSIX absolute paths).",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

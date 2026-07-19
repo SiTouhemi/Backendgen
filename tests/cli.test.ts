@@ -99,6 +99,21 @@ describe("backendgen subprocess contract", () => {
     });
   });
 
+  it("adds a YAML extension when init receives an extensionless path", async () => {
+    const directory = await temporaryDirectory();
+    const requested = join(directory, "demo");
+    const output = `${requested}.yaml`;
+
+    const initialized = run(["init", requested, "--name", "local-demo"]);
+    expect(initialized.status).toBe(0);
+    expect(initialized.stdout).toContain(`backendgen validate ${output}`);
+    await expect(readFile(output, "utf8")).resolves.toContain("name: local-demo");
+
+    const validated = run(["validate", output, "--json"]);
+    expect(validated.status).toBe(0);
+    expect(JSON.parse(validated.stdout)).toMatchObject({ valid: true });
+  });
+
   it("exports both public schemas, refuses unknown names, and never overwrites", async () => {
     const directory = await temporaryDirectory();
 

@@ -976,6 +976,30 @@ export async function createTestApp(): Promise<TestContext> {
   configureApp(app);
   await app.init();
 
+  // Background workers (webhook dispatch, job polling, upload sweeps) poll on
+  // intervals and hold short claim transactions. Integration tests drive those
+  // workers explicitly and truncate tables between cases, so a scheduled tick
+  // racing a test causes nondeterministic deadlocks (PostgreSQL 40P01).
+  // Removing the scheduled intervals keeps every queue interaction test-driven.
+  try {
+    // The specifier is typed as plain string so projects generated without a
+    // scheduled worker (no @nestjs/schedule dependency) still type-check;
+    // the failed import is handled below at runtime.
+    const specifier: string = '@nestjs/schedule';
+    const schedule = (await import(specifier)) as {
+      SchedulerRegistry: new () => {
+        getIntervals(): string[];
+        deleteInterval(name: string): void;
+      };
+    };
+    const registry = app.get(schedule.SchedulerRegistry, { strict: false });
+    for (const name of registry.getIntervals()) {
+      registry.deleteInterval(name);
+    }
+  } catch {
+    // The schedule module is absent when no feature registers a worker.
+  }
+
   return { app, prisma: app.get(PrismaService) };
 }
 
@@ -992,11 +1016,29 @@ function resetFile(context: TargetRenderContext): string {
 
 const TABLES = [${tables}];
 
-/** Truncates every generated table. Integration tests start from a clean state. */
+/**
+ * Truncates every generated table. Integration tests start from a clean state.
+ *
+ * Background queue workers (webhooks, jobs, notifications) poll on an interval
+ * and hold short FOR UPDATE SKIP LOCKED claim transactions, so a TRUNCATE can
+ * lose a deadlock race (PostgreSQL 40P01) and be chosen as the victim. The
+ * claim transactions are short-lived, so retrying the truncate is safe and
+ * deterministic.
+ */
 export async function resetDatabase(prisma: PrismaService): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    \`TRUNCATE TABLE \${TABLES.join(', ')} RESTART IDENTITY CASCADE\`,
-  );
+  const maxAttempts = 5;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await prisma.$executeRawUnsafe(
+        \`TRUNCATE TABLE \${TABLES.join(', ')} RESTART IDENTITY CASCADE\`,
+      );
+      return;
+    } catch (error) {
+      const isDeadlock = error instanceof Error && error.message.includes('40P01');
+      if (!isDeadlock || attempt >= maxAttempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+    }
+  }
 }
 `;
 }

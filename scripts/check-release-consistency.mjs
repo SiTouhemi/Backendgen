@@ -49,6 +49,19 @@ if (existsSync(serverJsonPath)) {
   const server = JSON.parse(await readFile(serverJsonPath, "utf8"));
   versions.push(["apps/mcp-distribution/server.json version", server.version]);
   versions.push(["apps/mcp-distribution/server.json packages[0].version", server.packages?.[0]?.version]);
+  // The MCP Registry server schema (2025-12-11) rejects publishes with
+  // description > 100 or title > 100 characters; catch that before the
+  // release workflow reaches mcp-publisher.
+  for (const [field, limit] of [["description", 100], ["title", 100]]) {
+    const value = server[field];
+    if (typeof value !== "string" || value.length === 0) {
+      failures.push(`apps/mcp-distribution/server.json ${field} is missing`);
+    } else if (value.length > limit) {
+      failures.push(
+        `apps/mcp-distribution/server.json ${field} is ${value.length} characters; the MCP Registry schema allows at most ${limit}`,
+      );
+    }
+  }
 } else if (releaseMode) {
   failures.push(
     "apps/mcp-distribution/server.json is missing. Run npm run prepare:mcp-registry with the final GitHub owner before releasing.",

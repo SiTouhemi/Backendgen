@@ -16,7 +16,7 @@ import {
   type PublicSchemaName,
 } from "@backend-compiler/specification";
 import { access, mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import {
   formatFeature,
   formatFeatures,
@@ -204,7 +204,9 @@ async function run(): Promise<void> {
     }
 
     case "init": {
-      const destination = resolve(process.cwd(), args.positional[0] ?? "backend.yaml");
+      const requestedPath = args.positional[0] ?? "backend.yaml";
+      const specificationPath = extname(requestedPath) === "" ? `${requestedPath}.yaml` : requestedPath;
+      const destination = resolve(process.cwd(), specificationPath);
       const nameFlag = args.flags.get("name");
       const projectName = typeof nameFlag === "string" ? nameFlag : "my-api";
 
@@ -222,8 +224,8 @@ async function run(): Promise<void> {
         json,
         { created: destination },
         `Created ${destination}\n\nNext steps:\n` +
-          `  backendgen validate ${args.positional[0] ?? "backend.yaml"}\n` +
-          `  backendgen generate ${args.positional[0] ?? "backend.yaml"} --output ./my-api\n\n` +
+          `  backendgen validate ${specificationPath}\n` +
+          `  backendgen generate ${specificationPath} --output ./my-api\n\n` +
           "Run `backendgen list-features` to see what you can enable.",
       );
       return;

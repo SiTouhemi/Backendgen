@@ -49,12 +49,21 @@ for (const packagePath of packagePaths) {
 const packageJson = packages.find((candidate) => candidate.name === "backendgen-mcp");
 if (packageJson === undefined) throw new Error("Missing backendgen-mcp package metadata");
 
+// The 2025-12-11 server schema caps description at 100 characters.
+const MAX_DESCRIPTION_LENGTH = 100;
+const serverDescription =
+  "Validate compact backend specs and generate tested NestJS, Prisma, and PostgreSQL repositories.";
+if (serverDescription.length > MAX_DESCRIPTION_LENGTH) {
+  throw new Error(
+    `server.json description is ${serverDescription.length} characters; the MCP Registry schema allows at most ${MAX_DESCRIPTION_LENGTH}`,
+  );
+}
+
 const server = {
   $schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   name: registryName,
   title: "BackendGen",
-  description:
-    "Validate compact backend specifications and generate tested NestJS, Prisma, and PostgreSQL repositories.",
+  description: serverDescription,
   repository: { url: repositoryUrl, source: "github" },
   version: packageJson.version,
   packages: [

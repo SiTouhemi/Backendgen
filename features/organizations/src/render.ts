@@ -637,7 +637,7 @@ function serviceSpec(config: OrganizationsConfig, userSoftDelete: boolean): stri
 `
     : "";
 
-  return `import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+  return `import { ConflictException, ForbiddenException${userSoftDelete ? ", NotFoundException" : ""} } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationService } from './organization.service';

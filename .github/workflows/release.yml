@@ -48,13 +48,30 @@ jobs:
       - run: npm run test:e2e
       - run: npm run benchmark:expansion:check
       - run: npm run test:distribution
+      # Publishes are skipped when the exact name@version already exists so a
+      # rerun after a partial failure resumes instead of failing on the
+      # already-published package (npm rejects republishing a version).
       - name: Publish CLI with npm provenance
-        run: npm publish --workspace backendgen --access public
+        run: |
+          version="${RELEASE_TAG#v}"
+          if npm view "backendgen@${version}" version >/dev/null 2>&1; then
+            echo "backendgen@${version} is already published; skipping"
+          else
+            npm publish --workspace backendgen --access public
+          fi
         env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish MCP server with npm provenance
-        run: npm publish --workspace backendgen-mcp --access public
+        run: |
+          version="${RELEASE_TAG#v}"
+          if npm view "backendgen-mcp@${version}" version >/dev/null 2>&1; then
+            echo "backendgen-mcp@${version} is already published; skipping"
+          else
+            npm publish --workspace backendgen-mcp --access public
+          fi
         env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Install verified MCP Registry publisher
         working-directory: apps/mcp-distribution
@@ -67,5 +84,16 @@ jobs:
       - name: Publish MCP Registry metadata
         working-directory: apps/mcp-distribution
         run: |
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          name="$(jq -r .name server.json)"
+          version="$(jq -r .version server.json)"
+          published="$(curl --fail --silent --show-error --get \
+            "https://registry.modelcontextprotocol.io/v0.1/servers" \
+            --data-urlencode "search=${name}" \
+            | jq -r --arg name "${name}" --arg version "${version}" \
+              '.servers[]?.server | select(.name == $name and .version == $version) | .version')"
+          if [ "${published}" = "${version}" ]; then
+            echo "${name} version ${version} is already in the MCP Registry; skipping"
+          else
+            ./mcp-publisher login github-oidc
+            ./mcp-publisher publish
+          fi

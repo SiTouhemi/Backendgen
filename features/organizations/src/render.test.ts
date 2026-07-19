@@ -65,6 +65,16 @@ describe("organizations renderer", () => {
     expect(service).toContain("where: { organizationId, role: OWNER_ROLE as never }");
   });
 
+  it("imports NotFoundException in the spec only when soft-delete tests use it", () => {
+    // Generated projects compile specs with noUnusedLocals, so an unused
+    // import is a build failure in the generated repository.
+    const withSoftDelete = contents(render({ userSoftDelete: true }), SPEC);
+    expect(withSoftDelete).toContain("NotFoundException");
+
+    const withoutSoftDelete = contents(render({ userSoftDelete: false }), SPEC);
+    expect(withoutSoftDelete).not.toContain("NotFoundException");
+  });
+
   it("generates active-owner regression tests into the project", () => {
     const spec = contents(render({ userSoftDelete: true }), SPEC);
 

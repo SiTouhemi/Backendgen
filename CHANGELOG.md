@@ -33,7 +33,7 @@
 - Add reproducible expansion measurement and paired-run benchmark summaries without asserting unmeasured token savings.
 - Add AI-builder integration, launch/pricing guidance, and a responsive static launch page.
 
-## 0.2.0 - Unreleased alpha
+## 0.2.0 - 2026-07-19 (alpha)
 
 ### Release blockers closed (2026-07-17)
 
