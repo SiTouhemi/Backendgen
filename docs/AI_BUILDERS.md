@@ -6,8 +6,8 @@ BackendGen is distributed as two local npm executables:
 - `@2hemi/backendgen-mcp` exposes concise compiler tools to coding agents over stdio.
 
 Both packages contain self-contained executables, require Node.js 22 or newer,
-and generate source code that has no BackendGen runtime dependency. The npm
-commands below become available after the first public release.
+and generate source code that has no BackendGen runtime dependency. Both public
+packages are available now on npm.
 
 ## Fastest local setup
 
@@ -107,7 +107,7 @@ bring-your-own servers; Lovable documents local MCP in its
 
 ## GitHub Action
 
-Once this repository is public, consumers can validate regeneration in CI:
+Consumers can validate regeneration in CI with the public GitHub Action:
 
 ```yaml
 steps:
@@ -115,7 +115,7 @@ steps:
   - uses: actions/setup-node@v4
     with:
       node-version: 22
-  - uses: OWNER/backend-compiler@v0.2.0
+  - uses: SiTouhemi/Backendgen@v0.2.2
     with:
       spec: backend.yaml
       output: backend
@@ -124,8 +124,8 @@ steps:
 ```
 
 The action pins an exact npm package version, validates before generation, and
-fails when committed generated files are stale. Replace `OWNER` only after the
-final public repository owner is known.
+fails when committed generated files are stale. Set its `version` input when
+you need to pin a newer BackendGen npm release.
 
 ## Frontend handoff contract
 
